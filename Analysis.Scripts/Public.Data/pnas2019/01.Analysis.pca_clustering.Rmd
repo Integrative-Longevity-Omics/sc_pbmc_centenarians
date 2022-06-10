@@ -1,0 +1,120 @@
+---
+title: "Seurat pca and clustering analysis of scRNA-seq of PBMCs from supercentenarians and controls"
+author: "Tanya Karagiannis"
+date: "01/15/20"
+output: html_document
+---
+
+Seurat 3
+R/3.6.0
+
+
+Purpose: 
+scRNA-seq analysis of data from Hashimoto et al 2019 PNAS
+
+Load libraries
+```{r}
+library(dplyr)
+library(Seurat)
+library(useful)
+library(cowplot)
+library(ensembldb)
+library(EnsDb.Hsapiens.v86, lib.loc = "/restricted/projectnb/montilab-p/R_pkgs/CentOS7/R_3.6.0")
+
+PBMC_SC <-readRDS("/restricted/projectnb/montilab-p/CBMrepositoryData/scRNAseq/longevity/pnas2019-centenarian/processed/processed_seurat.rds")
+```
+
+PCA and visualize cells using tSNE.
+Keep only singlets for this process. 
+```{r }
+# Run PCA
+PBMC_SC <- RunPCA(PBMC_SC, features = VariableFeatures(PBMC_SC))
+
+ElbowPlot(object = PBMC_SC)
+
+# We select the top 10 PCs for clustering and tSNE based on PCElbowPlot
+PBMC_SC <- FindNeighbors(PBMC_SC, reduction = "pca", dims = 1:15)
+PBMC_SC <- FindClusters(PBMC_SC, resolution = 0.6)
+
+# Projecting singlet identities on TSNE visualization
+PBMC_SC <- RunTSNE(PBMC_SC, reduction = "pca", res = 0.5, dims = 1:15)
+PBMC_SC <- RunUMAP(PBMC_SC, reduction = "pca", res = 0.5, dims = 1:15)
+
+# save data and results
+saveRDS(PBMC_SC, file = "/restricted/projectnb/montilab-p/projects/longevity/pnas2019/data/pnas2019.rds")
+
+# Projecting identities TSNE visualization
+p1 <- DimPlot(PBMC_SC, reduction = "tsne")
+p2 <- DimPlot(PBMC_SC, reduction = "tsne", group.by = "cell.types", label = TRUE)
+plot_grid(p1, p2)
+```
+
+Gene markers from pnas paper
+-Figure 1
+-Figure S1
+
+```{r}
+#gene markes from Hashimoto et al 2019 PNAS
+#markers for all cell types
+
+FeaturePlot(PBMC_SC, features = c("CD3E","MS4A1","KLRF1","CD14","FCGR3A","HBA1"))
+
+```
+
+Average expression of gene markers based on original cell types identified
+```{r}
+Idents(PBMC_SC) <- "cell.types"
+ct <- rev(c("TC1", "TC2","BC","NK","M14","M16","EC","MKI","DC","MGK"))
+
+Idents(PBMC_SC) <- factor(Idents(PBMC_SC), levels = ct )
+
+markers.to.plot <- c("CD3D", "CD3G", "TRAC", #tcells
+                     "CD19", "CD79A", "MSA41", #bcells
+                     "GZMB","KLRF1","GNLY", "NKG7", #nk cells
+                     "CD14","FCGR3A","S100A8", "S100A12","CD163", #monocytes
+                     "HBA1","HBD1", "HBA2", "HBB", #erythrocytes
+                     "MALAT1", 
+                     "MKI67","CDK1", #MKI 
+                     "HLA.DQA1", "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                     "ClEC4C","ITGB3","CMTM5","PPBP", "GNG11", #megakaryocytes
+                     "IGJ", "MZB1") #plasma cells
+
+DotPlot(PBMC_SC, features = rev(markers.to.plot), dot.scale = 8) + RotatedAxis()
+
+
+```
+Proportion of cell types for each sample grouped by age
+```{r}
+
+#cell type proportion for each sample
+table_age <- prop.table(table(PBMC_SC@meta.data$ct.consensus, PBMC_SC@meta.data$sample.ID), margin = 2)
+
+#reshape data
+table_age <- melt(table_age)
+colnames(table_age) <- c("cell.types","sample.ID","prop")
+
+#Add back age
+#Set based on combined age groups
+Age <- unlist(sapply(1:nrow(table_age), function(x){Metadata$Age.by.decade..1.1.2017.[Metadata$Sample %in% table_age$sample.ID[x]]}))
+
+table_age <- as.data.frame(table_age)
+
+table_age$age <- Age
+table_age$age <- as.character(table_age$age)
+table_age$age[which(table_age$age == "20-29")] <- "20-39"
+table_age$age[which(table_age$age == "30-39")] <- "20-39"
+table_age$age[which(table_age$age == "60-69")] <- "60-79"
+table_age$age[which(table_age$age == "70-79")] <- "60-79"
+
+#ggplot cell type proportions for each sample based on age group
+p3 <- ggplot(table_age, aes(age, prop)) + geom_boxplot(aes(fill = age )) + geom_point() + facet_wrap(~cell.types, scales = "free_y") + theme_classic(base_size = 20) + theme(axis.line=element_line()) 
+p3 <- p3 + scale_fill_manual(values=RColorBrewer::brewer.pal(n = 8, name = "PRGn")[c(1,3,6,8)])
+
+p3
+
+```
+
+```{r}
+sessionInfo()
+
+```

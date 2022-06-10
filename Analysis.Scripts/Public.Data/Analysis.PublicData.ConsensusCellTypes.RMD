@@ -1,0 +1,390 @@
+---
+title: "peripheral blood immune cell type signatures: comparing cell type between control and aging datasets"
+author: "Tanya Karagiannis"
+date: "04/19/20"
+output: html_document
+---
+
+
+Purpose: 
+Comparison of subpopulations between natgen2018 data and pnas2019 aging data
+Form consensus cell types
+
+Load libraries
+```{r}
+library(dplyr)
+library(Seurat)
+library(useful)
+library(cowplot)
+
+library(harmony, lib.loc = "/restricted/projectnb/montilab-p/R_pkgs/CentOS7/R_4.0.0/")
+#library(devtools)
+#withr::with_libpaths("/restricted/projectnb/montilab-p/R_pkgs/CentOS7/R_3.6.0",install_github("immunogenomics/harmony"))
+
+PBMC_SC <- readRDS(file = "/restricted/projectnb/montilab-p/projects/longevity/scCentenarian/Public_Reanalysis/pnas2019/data/pnas2019.rds")
+PBMC_45 <- readRDS(file = "/restricted/projectnb/montilab-p/projects/longevity/scCentenarian/Public_Reanalysis/natgen2018/data/natgen2018.rds")
+
+```
+
+Change format of names in pnas2019 to match format in natgen2018
+```{r}
+PBMC_SC.dat <- GetAssay(PBMC_SC)
+PBMC_SC.counts <- PBMC_SC.dat@counts
+PBMC_SC.log <- PBMC_SC.dat@data
+rownames(PBMC_SC.counts) <- make.names(rownames(PBMC_SC.counts))
+rownames(PBMC_SC.log) <- make.names(rownames(PBMC_SC.log))
+
+PBMC_SC[['RNA']]@counts <- PBMC_SC.counts
+PBMC_SC[['RNA']]@data <- PBMC_SC.log
+```
+
+Subpopulations visualized for each dataset based on separate analyses
+```{r}
+# Projecting identities TSNE visualization
+p1 <- DimPlot(PBMC_45, reduction = "umap", group.by = "subpop", label = TRUE)
+p2 <- DimPlot(PBMC_SC, reduction = "umap", group.by = "subpop", label = TRUE)
+plot_grid(p1, p2)
+```
+
+
+Merge datasets in one seurat object and run PCA 
+```{r}
+pbmc <- merge(PBMC_45, PBMC_SC, add.cell.ids = c("NATGEN", "PNAS"), project = "PBMC.IMMUNE") %>%
+    Seurat::NormalizeData(verbose = FALSE) %>%
+    FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>% 
+    ScaleData(verbose = FALSE) %>% 
+    RunPCA(pc.genes = pbmc@var.genes, npcs = 20, verbose = FALSE)
+
+head(pbmc@meta.data)
+
+#add variable batch to distinguish datasets
+pbmc@meta.data$batch <- c(rep("NATGEN", ncol(PBMC_45)), rep("PNAS", ncol(PBMC_SC)))
+pbmc <- ScaleData(pbmc, split.by = "batch")
+
+#Visualize PCA
+p1 <- DimPlot(object = pbmc, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = pbmc, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+
+```
+
+Function to calculate average silhoutte score
+```{r}
+batch_sil <- function(pca.data, batch, nPCs = 20){
+  require(cluster)
+    # in scone, they use svd to compute principal components.
+    # For now, we'll keep the PCA object created in
+    # prcomp to be consistent
+    # proj <- svd(scale(t(expr),center = TRUE,scale = TRUE),
+    #             nu = 3, nv =0)$u
+
+    dd <- as.matrix(dist(pca.data[, seq_len(nPCs)]))
+    summary(silhouette(as.numeric(batch), dd))$avg.width
+}
+```
+
+Calculate average silhoutte score for each cell type population before batch correction with Harmony
+```{r}
+#local silhouette score
+cell.types <- levels(as.factor(pbmc$ct.consensus))
+table(pbmc$ct.consensus, pbmc$batch)
+cell.types <- cell.types[-which(cell.types %in% c("T gamma delta","CD4 T Cytotoxic"))]
+#pca.data <- pbmc@reductions$pca@cell.embeddings
+
+pca.sil.score <- lapply(1:length(cell.types), function(x){
+  ct.order <- which(pbmc@meta.data$ct.consensus == cell.types[x])
+  ct.cells <- rownames(pbmc@meta.data)[ct.order]
+  pca.data <- pbmc@reductions$pca@cell.embeddings[ct.cells,]
+  batch <- as.factor(pbmc@meta.data$batch[ct.order])
+
+  pca.sil <- batch_sil(pca.data, batch, nPCs = 20)
+  return(pca.sil)
+})
+pca.sil.score <- unlist(pca.sil.score)
+names(pca.sil.score) <- cell.types
+
+#local silhouette score
+cell.types <- levels(as.factor(pbmc$ct.consensus))
+table(pbmc$ct.consensus, pbmc$batch)
+cell.types <- cell.types[-which(cell.types %in% c("T gamma delta","CD4 T Cytotoxic"))]
+#pca.data <- pbmc@reductions$pca@cell.embeddings
+
+```
+
+Run Harmony to correct for batch differences in PCA space
+```{r}
+pbmc <- pbmc %>% 
+    RunHarmony("batch", plot_convergence = TRUE)
+
+saveRDS(pbmc, file = "/restricted/projectnb/montilab-p/projects/longevity/scCentenarian/Public_Reanalysis/Data/pbmc.rds")
+
+p1 <- DimPlot(object = pbmc, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = pbmc, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+
+```
+
+
+Average silhoutte score for each cell type after batch correction
+```{r}
+#local average silhoutte score
+harmony.sil.score <- lapply(1:length(cell.types), function(x){
+  ct.order <- which(pbmc@meta.data$ct.consensus == cell.types[x])
+  ct.cells <- rownames(pbmc@meta.data)[ct.order]
+  harmony.data <- pbmc@reductions$harmony@cell.embeddings[ct.cells,]
+  batch <- as.factor(pbmc@meta.data$batch[ct.order])
+  harmony.sil <- batch_sil(harmony.data, batch, nPCs = 20)
+  return(harmony.sil)
+})
+harmony.sil.score <- unlist(harmony.sil.score)
+names(harmony.sil.score) <- cell.types
+sil.score <- cbind.data.frame("pre-correction" = pca.sil.score, "post-correction" = harmony.sil.score)
+write.csv(sil.score, "public.sil.score.csv")
+```
+
+Run UMAP based on top 20 Harmony corrected PCs
+```{r}
+pbmc <- pbmc %>% 
+    RunUMAP(reduction = "harmony", dims = 1:20) %>%
+    FindNeighbors(reduction = "harmony", dims = 1:20) %>% 
+    FindClusters(resolution = 0.8) %>% 
+    identity()
+
+p1 <- DimPlot(object = pbmc, reduction = "umap", pt.size = .1, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(object = pbmc, reduction = "umap", pt.size = .1, group.by = "subpop", label = T)
+plot_grid(p1,p2)
+
+```
+
+Feature average expression across separately identified subpopulations
+```{r}
+
+Idents(pbmc) <- "subpop"
+DotPlot(pbmc, features = rev(c("CD3D", "CD3G", "TRAC", #tcells
+                               "CCR7","S100A4","CREM", #naive vs activated
+                              "CD8A","CD8B","TRDC",#cd8 and tdeltagamma
+                              "GZMB","KLRF1","GNLY", "NKG7", #nk cells
+                              "CD19", "CD79A", "MS4A1", #bcells
+                              "CD14","FCGR3A","S100A8", "S100A12","CD163", #monocytes
+                              "ITGB3","CMTM5","PPBP", "GNG11", #megakaryocytes
+                              "MALAT1", 
+                              "HLA.DQA1", "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                              "IGJ", "MZB1", #plasma cells
+                              "HBA1","HBD1", "HBA2", "HBB", #erythrocytes
+                              "MKI67","CDK1" )) #MKI 
+) + RotatedAxis()
+```
+
+
+Set consensus populations
+```{r}
+
+Idents(pbmc) <- "seurat_clusters"
+B.naive <- WhichCells(pbmc, idents=8)
+B.memory <- WhichCells(pbmc, idents=c(12))
+EC.cells <- WhichCells(pbmc, idents=c(9,16,22,24))
+MKI.cells <- WhichCells(pbmc, idents=c(21))
+
+
+Idents(pbmc) <- "subpop"
+Idents(pbmc, cells=B.naive) <- "BC Naive"
+Idents(pbmc, cells=B.memory) <- "BC Memory"
+Idents(pbmc, cells=EC.cells) <- "EC"
+Idents(pbmc, cells=MKI.cells) <- "MKI"
+Idents(pbmc, cells=WhichCells(pbmc, idents=c("Pro.myeloid"))) <- "MGK"
+Idents(pbmc, cells=WhichCells(pbmc, idents=c("CD8 T V2"))) <- "BC Naive"
+Idents(pbmc, cells=WhichCells(pbmc, idents=c("HSC"))) <- "pDC"
+
+pbmc$ct.consensus <- Idents(pbmc)
+
+saveRDS(pbmc, file = "/restricted/projectnb/montilab-p/projects/longevity/scCentenarian/Public_Reanalysis/Data/pbmc_public.rds")
+
+Idents(pbmc) <- "group"
+CT.cells <- WhichCells(pbmc, idents="CT")
+EL.cells <- WhichCells(pbmc, idents = "SC")
+
+Idents(pbmc) <- "age.group"
+Idents(pbmc, cells=CT.cells) <- "CT"
+Idents(pbmc, cells=EL.cells) <- "EL"
+
+pbmc$age.group <- Idents(pbmc)
+
+Idents(pbmc) <- "sample.ID"
+Female.cells <- WhichCells(pbmc, idents = c("SC1","SC3","SC4","SC5","SC6","CT2","CT3","CT4"))
+Male.cells <- WhichCells(pbmc, idents = c("SC2","SC7","CT1","CT5"))
+Idents(pbmc) <- "Sex"
+Idents(pbmc, cells=Female.cells) <- "Female"
+Idents(pbmc, cells=Male.cells) <- "Male"
+pbmc$sex <- Idents(pbmc)
+
+p1 <- DimPlot(object = pbmc, reduction = "umap", pt.size = .1, group.by = "ct.consensus", label = TRUE)
+p2 <- DimPlot(object = pbmc, reduction = "umap", pt.size = .1, group.by = "ct.consensus",split.by = "batch", label = T )
+plot_grid(p1,p2)
+
+```
+
+Feature average expression of consensus cell types
+```{r}
+pbmc$ct.consensus <- factor(pbmc$ct.consensus,levels = rev(c("CD4 T NonCytotoxic","CD4 T Cytotoxic","CD8 T Cytotoxic","T gamma delta","NK","BC Naive","BC Memory","M14","M16","MGK","mDC","pDC","Plasma","EC","MKI")))
+
+Idents(pbmc) <- "ct.consensus"
+DotPlot(pbmc, features = rev(c("CD3D", "CD3G", "TRAC", #tcells
+                               "CCR7","S100A4","CREM", #naive vs activated
+                              "CD8A","CD8B","TRDC",#cd8 and tdeltagamma
+                              "GZMB","KLRF1","GNLY", "NKG7", #nk cells
+                              "CD19", "CD79A", "MS4A1", #bcells
+                              "CD14","FCGR3A","S100A8", "S100A12","CD163", #monocytes
+                              "ITGB3","CMTM5","PPBP", "GNG11", #megakaryocytes
+                              "MALAT1", 
+                              "HLA.DQA1", "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                              "IGJ", "MZB1", #plasma cells
+                              "HBA1","HBD1", "HBA2", "HBB", #erythrocytes
+                              "MKI67","CDK1" )) #MKI 
+) + RotatedAxis()
+
+```
+
+Average scaled expression module scores for immune cell type signatures
+```{r}
+vlnplot <- function(seurat_object, metadata, group, cell.type = NULL, color.box = color.box){
+  
+  #seurat_object <- subset(seurat_object, idents = cell.type)
+  
+  
+  #Res <- seurat_object@meta.data[, c("ct.consensus", names(genesets))]
+  Res <- cbind.data.frame(group, metadata)
+  colnames(Res)[1] <- "clusters"
+  require(reshape2)
+  ResFlat <- reshape2::melt(Res)
+  ResFlat <- ResFlat %>% filter(clusters == cell.type)
+  #color.box <- rep("grey", length(genesets))
+  #color.box[cell.type %in% names(genesets)] <- "blue"
+  
+  require(ggplot2)
+  ggplot2::ggplot(ResFlat, aes(
+    x = variable, y = value)) +
+    #ggplot2::geom_violin() +
+    ggplot2::geom_boxplot() +
+    #ggplot2::geom_jitter() +
+    ggplot2::facet_wrap(~clusters) +
+    theme_classic(base_size = 30) +
+    #facet_grid(clusters~variable)+
+    aes(fill = as.factor(variable)) +
+  scale_color_manual(values = color.box)+
+    theme(legend.position = "none")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    labs(x = "genesets", y = "absolute average module score")
+  
+}
+
+```
+
+Average expression of geneset signatures
+```{r}
+#Main populations
+Idents(pbmc_public) <- "ct.consensus"
+Idents(pbmc_public, cells = WhichCells(pbmc_public, idents = c("BC Naive", "BC Memory", "Plasma"))) <- "B.cells"
+Idents(pbmc_public, cells = WhichCells(pbmc_public, idents = c("CD4 T Naive", "CD4 T Memory","CD4 T Cytotoxic", "CD8 T","T gamma delta"))) <- "T.cells"
+Idents(pbmc_public, cells = WhichCells(pbmc_public, idents = c("M14", "M16","mDC", "pDC","MGK","EC"))) <- "Myeloid.cells"
+pbmc_public$main.ct <- Idents(pbmc_public)
+
+#Biocarta = msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:BIOCARTA")
+#msigdbr_list = split(x =Biocarta$gene_symbol, f = Biocarta$gs_name)
+#Biocarta <- msigdbr_list[c("BIOCARTA_THELPER_PATHWAY", "BIOCARTA_TCYTOTOXIC_PATHWAY")]
+#Biocarta <- list(T.cell = unique(c(Biocarta[["BIOCARTA_THELPER_PATHWAY"]],Biocarta[["BIOCARTA_TCYTOTOXIC_PATHWAY"]])))
+
+pbmc_public1 <- AddModuleScore(pbmc_public, features = immune.genesets[c("B.cell", "Early.lymphoid.T.lymphocyte", "NK cells resting", "Monocytes", "DC.precursor")], name = c("B.cell", "Early.lymphoid.T.lymphocyte", "NK cells resting", "Monocytes", "DC.precursor"), search = T)
+
+cell.types <- levels(droplevels(pbmc_public1$main.ct))
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(pbmc_public1) <- "main.ct"
+  pbmc_public1 <- subset(pbmc_public1, idents = c(cell.types[x]))
+  group <- pbmc_public1$main.ct
+  meta.data <- pbmc_public1@meta.data[,c(16:20)]
+  #meta.data <- abs(meta.data)
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(pbmc_public1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+#B cell subpopulations
+Idents(pbmc_public) <- "ct.consensus"
+Bcells <- subset(pbmc_public, idents = c("BC Naive", "BC Memory", "Plasma"))
+Bcells1 <- AddModuleScore(Bcells, features = immune.genesets[c("B cells naive", "B cells memory", "Plasma cells")], name = c("B cells naive", "B cells memory", "Plasma cells"), search = T)
+
+
+cell.types <- levels(droplevels(Bcells1$ct.consensus))
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Bcells1) <- "ct.consensus"
+  Bcells1 <- subset(Bcells1, idents = c(cell.types[x]))
+  group <- Bcells1$ct.consensus
+  meta.data <- Bcells1@meta.data[c(15:17)]
+  meta.data <- abs(meta.data)
+  #meta.data <- avgGeneExp(Bcells1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Bcells1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+patchwork::wrap_plots(plotlist = plot.sets, ncol = 1)
+
+#T cell subpopulations
+Idents(pbmc_public) <- "ct.consensus"
+Tcells <- subset(pbmc_public, idents = c("CD4 T Naive", "CD4 T Memory", "CD8 T", "CD4 T Cytotoxic", "T gamma delta", "BC Naive", "BC Memory", "Plasma","NK"))
+
+CD4Memory.sig <- list("T cells CD4 memory" = unique(do.call(c,immune.genesets[c("T cells CD4 memory resting", "T cells CD4 memory activated")])))
+NK.sig <- list("NK cells" = unique(do.call(c,immune.genesets[c("NK cells resting", "NK cells activated")])))
+
+Tcells1 <- AddModuleScore(Tcells, features = c(immune.genesets[c("T cells CD4 naive")], CD4Memory.sig, immune.genesets[c("T cells CD8", "T cells gamma delta", "B cells naive", "B cells memory", "Plasma cells")], NK.sig), name = c(c("T cells CD4 naive", "T cells CD4 memory resting", "T cells CD8", "T cells gamma delta", "B cells naive","B cells memory","Plasma cells","NK cells")), search = T)
+
+cell.types <- levels(droplevels(Tcells1$ct.consensus))
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Tcells1) <- "ct.consensus"
+  Tcells1 <- subset(Tcells1, idents = c(cell.types[x]))
+  group <- Tcells1$ct.consensus
+  meta.data <- Tcells1@meta.data[c(15:22)]
+  meta.data <- abs(meta.data)
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Tcells1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+#Myeloid subpopulations
+Idents(pbmc_public) <- "ct.consensus"
+Myeloid <- subset(pbmc_public, idents = c("M14","M16", "mDC", "pDC", "MGK", "EC"))
+Myeloid1 <- AddModuleScore(Myeloid, features = c(immune.genesets[c("Monocyte", "Mono.Mac")] ,Liver.Immune[c("DC1")],immune.genesets[c("pDC.precursor","Megakaryocyte", "Late.Erythroid")]), name = c(c("Monocyte", "Mono.Mac", "mDC","pDC.precursor", "Megakaryocyte", "Late.Erythroid")), search = T)
+
+cell.types <- levels(droplevels(Myeloid1$ct.consensus))
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Myeloid1) <- "ct.consensus"
+  Myeloid1 <- subset(Myeloid1, idents = c(cell.types[x]))
+  group <- Myeloid1$ct.consensus
+  meta.data <- Myeloid1@meta.data[c(15:20)]
+  meta.data <- abs(meta.data)
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Myeloid1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+
+```
+
+
+
+Add back to separate datasets
+```{r}
+Idents(pbmc) <- "batch"
+natgen <- subset(pbmc, ident = "NATGEN")
+pnas <- subset(pbmc, ident = "PNAS")
+
+PBMC_45 <- AddMetaData(PBMC_45, metadata = natgen@meta.data$ct.consensus, col.name = "ct.consensus")
+PBMC_45 <- AddMetaData(PBMC_45, metadata = natgen@meta.data$age.group, col.name = "age.group")
+saveRDS(PBMC_45,"/restricted/projectnb/montilab-p/projects/longevity/scCentenarian/Public_Reanalysis/natgen2018/data/natgen2018.rds")
+PBMC_SC@meta.data$ct.consensus <- pnas$ct.consensus
+PBMC_SC@meta.data$age.group <- pnas$age.group
+saveRDS(PBMC_SC,"/restricted/projectnb/montilab-p/projects/longevity/scCentenarian/Public_Reanalysis/pnas2019/data/pnas2019.rds")
+
+```

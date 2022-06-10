@@ -1,0 +1,501 @@
+---
+title: "Subpopulation identification"
+author: "Tanya Karagiannis"
+date: "04/14/20"
+output: html_document
+---
+
+Seurat 3
+R/3.6.0
+
+
+Purpose: 
+scRNA-seq analysis of data from Hashimoto et al 2019 PNAS
+
+Load libraries
+```{r}
+library(dplyr)
+library(Seurat)
+library(useful)
+library(cowplot)
+
+PBMC_SC <- readRDS(file = "/restricted/projectnb/montilab-p/projects/longevity/pnas2019/data/pnas2019.rds")
+```
+
+Current cell types visualized
+```{r}
+# Projecting identities TSNE visualization
+p1 <- DimPlot(PBMC_SC, reduction = "umap")
+p2 <- DimPlot(PBMC_SC, reduction = "umap", group.by = "cell.types")
+plot_grid(p1, p2)
+```
+
+Subset populations:Tcells
+TC1 and TC2
+```{r}
+#subset population
+Idents(PBMC_SC) <- "cell.types"
+Tcells <- subset(PBMC_SC, idents = c("TC1", "TC2","NK","MKI"))
+B <- subset(PBMC_SC, idents = c("BC"))
+Myeloid <- subset(PBMC_SC, idents = c("M14","M16","DC","MGK", "EC"))
+```
+
+Tcells
+Top 2000 variable genes and run PCA analysis
+```{r}
+
+Tcells <-  FindVariableFeatures(Tcells, selection.method = "vst", nfeatures = 2000) %>%
+            ScaleData(features = row.names(Tcells))
+
+
+Tcells <- RunPCA(Tcells, features = VariableFeatures(Tcells), npcs = 50)
+
+
+saveRDS(Tcells, file = "/restricted/projectnb/montilab-p/projects/longevity/pnas2019/data/Tcells.rds")
+
+
+
+ElbowPlot(object = Tcells, ndims = 20)
+
+DimHeatmap(Tcells, dims = 1:20, cells = 500, balanced = TRUE)
+
+```
+
+T cells: Cluster and visualize original cell types using tSNE.
+PCs selected: 12 PCs
+```{r }
+
+Tcells <- Tcells %>%
+          #FindNeighbors(reduction = "pca", dims = 1:10) %>% 
+          #FindClusters(resolution = 0.5) %>%
+          RunUMAP(reduction = "pca", dims = 1:10)
+
+saveRDS(Tcells, file = "./Tcells.rds")
+
+# Projecting singlet identities on TSNE visualization
+p1 <- DimPlot(Tcells, reduction = "umap", pt.size = 0.8, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(Tcells, reduction = "umap", pt.size = 0.8, group.by = "cell.types")
+plot_grid(p1, p2)
+
+#NK: 0, 5, 8, 10
+#CD8: 1, 4, 6, 9
+#CD4 Naive: 2
+#CD4 Mem: 3, 11
+#CD4 Cytotoxic: 4
+# T gamma delta: 7
+#EC: 13
+#MKI: 12
+
+```
+
+
+```{r}
+#gene markes from Hashimoto et al 2019 PNAS
+#T cell markers
+FeaturePlot(Tcells, features = c("CD3D","CD3E","IL7R","CCR7","S100A4","CD8A","CD8B"))
+#cytotoxic
+FeaturePlot(Tcells, features = c("GZMH","GZMB","GZMA","PRF1"))
+#noncytotoxic
+FeaturePlot(Tcells, features = c("CCR7","SELL","LEF1","TCF7"))
+
+#Dotplot of naive and central memory gene markers
+DotPlot(Tcells, features = c("CD3E","CD4","CD8A","CD8B","SELL","CD27")) + RotatedAxis()
+
+#Dotplot of effector memory gene markers
+DotPlot(Tcells, features = c("CD3E","CD4","CD8A","CD8B","CD27","PRF1","GNLY")) + RotatedAxis()
+
+#T delta gamma cells
+DotPlot(Tcells, features = c("CD3E","CD8A","TRDC")) + RotatedAxis()
+
+DotPlot(Tcells, features = c("CD3D", "CD3G", "TRAC", #tcells
+                     "CD19", "CD79A", "MSA41", #bcells
+                     "GZMB","KLRF1","GNLY", "NKG7", #nk cells
+                     "CD14","FCGR3A","S100A8", "S100A12","CD163", #monocytes
+                     "HBA1","HBD1", "HBA2", "HBB", #erythrocytes
+                     "MALAT1", 
+                     "MKI67","CDK1", #MKI 
+                     "HLA.DQA1", "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                     "ClEC4C","ITGB3","CMTM5","PPBP", "GNG11", #megakaryocytes
+                     "IGJ", "MZB1") #plasma cells
+) + RotatedAxis()
+```
+Tcells
+Differential Expression Analysis between clusters
+```{r}
+#FindMarkers
+Tcells.markers <- FindAllMarkers(Tcells, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+top50_Tcells <- Tcells.markers %>% group_by(cluster) %>% top_n(n = 50, wt = avg_logFC)
+write.csv(Tcells.markers, "Tcell_markers.csv")
+write.csv(top50_Tcells, "top50_Tcells.csv")
+```
+
+Module Scores
+-CIBERSORT genesets
+```{r}
+biocarta <- lapply(1:length(Biocarta), function(x){biocarta <- make.names(Biocarta[[x]])})
+names(biocarta) <- names(Biocarta)
+Tcells1 <- AddModuleScore(Tcells, features = Liver.Immune, name = names(Liver.Immune))
+
+cell.types <- levels(Tcells1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Tcells1) <- "seurat_clusters"
+  Tcells1 <- subset(Tcells1, idents = c(cell.types[x]))
+  group <- Tcells1$seurat_clusters
+  meta.data <- Tcells1@meta.data[c(14:35)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Tcells1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Tcells1) <- "seurat_clusters"
+  Tcells1 <- subset(Tcells1, idents = c(cell.types[x]))
+  group <- Tcells1$seurat_clusters
+  meta.data <- Tcells1@meta.data[c(14:25)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Tcells1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Tcells1) <- "seurat_clusters"
+  Tcells1 <- subset(Tcells1, idents = c(cell.types[x]))
+  group <- Tcells1$seurat_clusters
+  meta.data <- Tcells1@meta.data[c(14:40)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Tcells1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+```
+Tcell subtypes
+```{r}
+#NK: 0, 5, 8, 10
+#CD8: 1, 4, 7
+#CD4 Naive: 2
+#CD4 Mem: 3
+#CD4 Cytotoxic: 4
+# T gamma delta: 6
+#EC: 13
+#MKI: 12
+#MGK: 9
+#MGK/myeloid.progenitor: 11
+Idents(Tcells) <- "seurat_clusters"
+new.cluster.ids <- c("NK", "CD8", "CD4 Naive","CD4 Memory", "CD4 Cytotoxic", "NK","T gamma delta", "CD8","NK", "MGK", "NK","MGK","MKI","EC")
+
+names(new.cluster.ids) <- levels(Tcells)
+Tcells <- RenameIdents(Tcells, new.cluster.ids)
+
+Tcells$subpop <- Idents(Tcells)
+
+saveRDS(Tcells, file = "/restricted/projectnb/montilab-p/projects/longevity/pnas2019/data/Tcells.rds")
+
+p1 <- DimPlot(Tcells, reduction = "umap", pt.size = 0.8, group.by = "cell.types")
+p2 <- DimPlot(Tcells, reduction = "umap", pt.size = 0.8, group.by = "subpop")
+plot_grid(p1,p2)
+
+saveRDS(Tcells, file = "/restricted/projectnb/montilab-p/projects/longevity/pnas2019/data/Tcells.rds")
+
+```
+
+
+B cells
+Top 2000 variable genes and run PCA analysis
+```{r}
+
+B <-  FindVariableFeatures(B, selection.method = "vst", nfeatures = 2000) %>%
+            ScaleData(features = row.names(B))
+
+
+B <- RunPCA(B, features = VariableFeatures(B), npcs = 50)
+            
+  
+ 
+
+saveRDS(B, file = "./B.rds")
+
+
+ElbowPlot(object = B, ndims = 20)
+DimHeatmap(B, dims = 1:15, cells = 500, balanced = TRUE)
+
+```
+
+B cells: Cluster and visualize original cell types using tSNE.
+PCs selected: 5
+```{r }
+
+B <- B %>%
+          FindNeighbors(reduction = "pca", dims = 1:10) %>% 
+          FindClusters(resolution = 0.5) %>%
+          RunTSNE(reduction = "pca", dims = 1:10)
+
+
+
+# Projecting singlet identities on TSNE visualization
+p1 <- DimPlot(B, reduction = "tsne", pt.size = 1.5, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(B, reduction = "tsne", pt.size = 1.5, group.by = "cell.types")
+plot_grid(p1, p2)
+
+```
+B cells: Cell type gene markers
+```{r}
+#gene markers from Hashimoto et al 2019 PNAS
+FeaturePlot(B, features = c("CD27","CD38","IGHD","MS4A1","TCL1A","IGHG1","IGHM","IGHA1"))
+
+#FindMarkers
+Idents(B) <- "seurat_clusters"
+B.markers <- FindAllMarkers(B, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+top20_B <- B.markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_logFC)
+write.csv(top20_B, "top20_B.csv")
+
+#Dotplot of gene markers
+DotPlot(B, features = c("CD79A","CD79B","CXCR4","TCL1A","TNFRSF13B","CD27","CREM","IL2RA","MYC","CCL3","CCL4", "IGJ")) + RotatedAxis()
+
+```
+
+```{r}
+biocarta <- lapply(1:length(Biocarta), function(x){biocarta <- make.names(Biocarta[[x]])})
+names(biocarta) <- names(Biocarta)
+B1 <- AddModuleScore(B, features = CIBERSORT_genesets, name = names(CIBERSORT_genesets))
+
+cell.types <- levels(B1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(B1) <- "seurat_clusters"
+  B1 <- subset(B1, idents = c(cell.types[x]))
+  group <- B1$seurat_clusters
+  meta.data <- B1@meta.data[c(14:35)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(B1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(B1) <- "seurat_clusters"
+  B1 <- subset(B1, idents = c(cell.types[x]))
+  group <- B1$seurat_clusters
+  meta.data <- B1@meta.data[c(14:25)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(B1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(B1) <- "seurat_clusters"
+  B1 <- subset(B1, idents = c(cell.types[x]))
+  group <- B1$seurat_clusters
+  meta.data <- B1@meta.data[c(14:40)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(B1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+```
+
+Set subpopulations
+```{r}
+#B memory: 1, 4, 5
+#B naive:0, 2, 3, 6
+#Plasma: 8
+#CD8: 7
+Idents(B) <- "seurat_clusters"
+new.cluster.ids <- c("B Naive", "B Memory","B Naive", "B Naive","B Memory","B Memory","B Naive","CD8","Plasma")
+names(new.cluster.ids) <- levels(B)
+B <- RenameIdents(B, new.cluster.ids)
+
+B$subpop <- Idents(B)
+
+saveRDS(B, file = "/restricted/projectnb/montilab-p/projects/longevity/pnas2019/data/Bcells.rds")
+```
+
+
+
+Add subpopulations back
+```{r}
+Idents(PBMC_SC) <- "cell.types"
+
+#B Naive, B Memory, CD8, "Plasma
+Idents(B) <- "subpop"
+Idents(PBMC_SC, cells=WhichCells(B, idents="B Naive")) <- "BC Naive"
+Idents(PBMC_SC, cells=WhichCells(B, idents="B Memory")) <- "BC Memory"
+Idents(PBMC_SC, cells=WhichCells(B, idents="Plasma")) <- "Plasma"
+Idents(PBMC_SC, cells=WhichCells(B, idents="CD8")) <- "CD8 T V2"
+
+#NK, CD8, CD4 Naive, CD4 Memory, T gamma delta, CD4 Cytotoxic, MKI, EC
+Idents(Tcells) <- "subpop"
+Idents(PBMC_SC, cells=WhichCells(Tcells, idents="CD4 Naive")) <- "CD4 T Naive"
+Idents(PBMC_SC, cells=WhichCells(Tcells, idents="CD4 Memory")) <- "CD4 T Memory"
+Idents(PBMC_SC, cells=WhichCells(Tcells, idents="CD8")) <- "CD8 T"
+Idents(PBMC_SC, cells=WhichCells(Tcells, idents="CD4 Cytotoxic")) <- "CD4 T Cytotoxic"
+Idents(PBMC_SC, cells=WhichCells(Tcells, idents="T gamma delta")) <- "T gamma delta"
+Idents(PBMC_SC, cells=WhichCells(Tcells, idents="MKI")) <- "MKI"
+Idents(PBMC_SC, cells=WhichCells(Tcells, idents="EC")) <- "EC"
+Idents(PBMC_SC, cells=WhichCells(Tcells, idents="MGK")) <- "MGK"
+Idents(PBMC_SC, cells=WhichCells(Tcells, idents="Pro.myeloid")) <- "Pro.myeloid"
+
+
+#M14, M16, EC, mDC, pDC, MGK
+Idents(Myeloid) <- "subpop"
+Idents(PBMC_SC, cells=WhichCells(Myeloid, idents="M14")) <- "M14"
+Idents(PBMC_SC, cells=WhichCells(Myeloid, idents="M16")) <- "M16"
+Idents(PBMC_SC, cells=WhichCells(Myeloid, idents="mDC")) <- "mDC"
+Idents(PBMC_SC, cells=WhichCells(Myeloid, idents="pDC")) <- "pDC"
+Idents(PBMC_SC, cells=WhichCells(Myeloid, idents="MGK")) <- "MGK"
+Idents(PBMC_SC, cells=WhichCells(Myeloid, idents="EC")) <- "EC"
+
+PBMC_SC$subpop <- Idents(PBMC_SC)
+
+Idents(PBMC_SC) <- "subpop"
+Idents(PBMC_SC, cells = WhichCells(PBMC_SC, idents = "TC1")) <- "NK"
+Idents(PBMC_SC, cells = WhichCells(PBMC_SC, idents = "TC2")) <- "NK"
+
+PBMC_SC$subpop <- Idents(PBMC_SC)
+
+saveRDS(PBMC_SC, file = "/restricted/projectnb/montilab-p/projects/longevity/pnas2019/data/pnas.rds")
+
+
+#Dotplot of gene markers
+DotPlot(PBMC_SC, features = c("CD3D", "CD3G", "TRAC", #tcells
+                              "CD8A","CD8B","TRDC",
+                     "CD19", "CD79A", "MSA41", #bcells
+                     "GZMB","KLRF1","GNLY", "NKG7", #nk cells
+                     "CD14","FCGR3A","S100A8", "S100A12","CD163", #monocytes
+                     "HBA1","HBD1", "HBA2", "HBB", #erythrocytes
+                     "MALAT1", 
+                     "MKI67","CDK1", #MKI 
+                     "HLA.DQA1", "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                     "ClEC4C","ITGB3","CMTM5","PPBP", "GNG11", #megakaryocytes
+                     "IGJ", "MZB1") #plasma cells
+) + RotatedAxis()
+```
+
+
+Myeloid
+Top 2000 variable genes and run PCA analysis
+```{r}
+
+Myeloid <-  FindVariableFeatures(Myeloid, selection.method = "vst", nfeatures = 2000) %>%
+            ScaleData(features = row.names(Myeloid))
+
+
+Myeloid <- RunPCA(Myeloid, features = VariableFeatures(Myeloid), npcs = 50)
+
+
+ElbowPlot(object = Myeloid, ndims = 20)
+
+DimHeatmap(Myeloid, dims = 1:20, cells = 500, balanced = TRUE)
+
+```
+
+B cells: Cluster and visualize original cell types using tSNE.
+PCs selected: 5
+```{r }
+
+Myeloid <- Myeloid %>%
+          #FindNeighbors(reduction = "pca", dims = 1:10) %>% 
+          #FindClusters(resolution = 0.5) %>%
+          RunUMAP(reduction = "pca", dims = 1:10)
+
+
+
+# Projecting singlet identities on TSNE visualization
+p1 <- DimPlot(Myeloid, reduction = "tsne", pt.size = 1.5, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(Myeloid, reduction = "tsne", pt.size = 1.5, group.by = "cell.types")
+plot_grid(p1, p2)
+
+```
+
+
+
+Myeloid cells: Cell type gene markers
+```{r}
+#gene markers from Hashimoto et al 2019 PNAS
+FeaturePlot(Erth, features = c("CD3D","CD8A","TRDC","GNLY","PPBP","MKI67"))
+
+#Dotplot of gene markers
+DotPlot(Erth, features = c("CD3D", "CD3G", "TRAC", #tcells
+                              "CD8A","CD8B","TRDC",
+                     "CD19", "CD79A", "MSA41", #bcells
+                     "GZMB","KLRF1","GNLY", "NKG7", #nk cells
+                     "CD14","FCGR3A","S100A8", "S100A12","CD163", #monocytes
+                     "HBA1","HBD1", "HBA2", "HBB", #erythrocytes
+                     "MALAT1", 
+                     "MKI67","CDK1", #MKI 
+                     "HLA.DQA1", "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                     "ClEC4C","ITGB3","CMTM5","PPBP", "GNG11", #megakaryocytes
+                     "IGJ", "MZB1") #plasma cells
+) + RotatedAxis()
+
+```
+
+```{r}
+biocarta <- lapply(1:length(Biocarta), function(x){biocarta <- make.names(Biocarta[[x]])})
+names(biocarta) <- names(Biocarta)
+Myeloid1 <- AddModuleScore(Myeloid, features = Liver.Immune, name = names(Liver.Immune))
+
+cell.types <- levels(Myeloid1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Myeloid1) <- "seurat_clusters"
+  Myeloid1 <- subset(Myeloid1, idents = c(cell.types[x]))
+  group <- Myeloid1$seurat_clusters
+  meta.data <- Myeloid1@meta.data[c(14:35)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Myeloid1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Myeloid1) <- "seurat_clusters"
+  Myeloid1 <- subset(Myeloid1, idents = c(cell.types[x]))
+  group <- Myeloid1$seurat_clusters
+  meta.data <- Myeloid1@meta.data[c(14:25)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Myeloid1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Myeloid1) <- "seurat_clusters"
+  Myeloid1 <- subset(Myeloid1, idents = c(cell.types[x]))
+  group <- Myeloid1$seurat_clusters
+  meta.data <- Myeloid1@meta.data[c(13:39)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Myeloid1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+```
+
+```{r}
+#M14: 0,1, 3,5
+#M16: 2
+#mDC: 8
+#pDC: 9
+#EC: 4,6,7, 10
+#MGK: 11
+
+Idents(Myeloid) <- "seurat_clusters"
+new.cluster.ids <- c("M14", "M14","M16", "M14","EC","M14","EC","EC","mDC","pDC","EC","MGK")
+names(new.cluster.ids) <- levels(Myeloid)
+Myeloid <- RenameIdents(Myeloid, new.cluster.ids)
+
+Myeloid$subpop <- Idents(Myeloid)
+
+saveRDS(Myeloid, file = "/restricted/projectnb/montilab-p/projects/longevity/pnas2019/data/Myeloid.rds")
+
+
+```
+
+Save results to data object
+```{r}
+PBMC_SC <- saveRDS(PBMC_SC, file = "/restricted/projectnb/montilab-p/projects/longevity/pnas2019/data/pnas2019.rds")
+
+```

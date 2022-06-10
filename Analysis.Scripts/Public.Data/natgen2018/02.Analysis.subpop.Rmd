@@ -1,0 +1,474 @@
+---
+title: "Cell Type subpopulations - scRNA-seq of PBMCs from 45 healthy individuals"
+author: "Tanya Karagiannis"
+date: "01/20/20"
+output: html_document
+---
+
+Seurat 3
+R/3.6.0
+
+
+Purpose: 
+Subset each cell type and cluster cells into subpopulations
+Focus on CD4 T cells and B cells based on findings from Hashimoto et al 2019 PNAS 
+- cell proportion changes in CD4 T cells and B cells between Supercentenarians and controls
+
+
+Load libraries
+```{r}
+suppressMessages(
+c(library(readr),
+library(dplyr),
+library(Seurat),
+library(Matrix),
+library(useful),
+library(biomaRt),
+library(cowplot))
+)
+
+```
+
+Load Seurat object with RNA counts and add metadata
+```{r}
+PBMC_45 <- readRDS(file = "PBMC_45.rds")
+```
+
+Subset data into CD4 T cells and B cells
+```{r}
+Idents(PBMC_45) <-  "updated.cell.types"
+Tcells <- subset(PBMC_45, idents = c("CD4+ T","CD8+ T", "CD56(bright) NK", "CD56(dim) NK"))
+B <- subset(PBMC_45, idents = c("B", "Plasma"))
+Myeloid <- subset(PBMC_45, idents = c("pDC","mDC","ncMonocyte","cMonocyte","Megakaryocyte"))
+
+saveRDS(CD4, file = "CD4.rds")
+saveRDS(B, file = "B.rds")
+```
+
+Tcells
+Top 2000 variable genes and run PCA analysis
+```{r}
+
+Tcells <-  FindVariableFeatures(Tcells, selection.method = "vst", nfeatures = 2000) %>%
+            ScaleData(features = row.names(Tcells))
+
+
+Tcells <- RunPCA(Tcells, features = VariableFeatures(Tcells), npcs = 50)
+            
+  
+ 
+
+saveRDS(Tcells, file = "./Tcells.rds")
+
+
+
+ElbowPlot(object = Tcells, ndims = 30)
+
+DimHeatmap(Tcells, dims = 1:20, cells = 500, balanced = TRUE)
+
+```
+
+T cells: Cluster and visualize original cell types using tSNE.
+PCs selected: 20 PCs
+```{r }
+
+Tcells <- Tcells %>%
+          FindNeighbors(reduction = "pca", dims = 1:10) %>% 
+          FindClusters(resolution = 0.5) %>%
+          RunUMAP(reduction = "pca", dims = 1:10)
+
+saveRDS(Tcells, file = "./Tcells.rds")
+
+# Projecting singlet identities on TSNE visualization
+p1 <- DimPlot(Tcells, reduction = "umap", pt.size = 0.8, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(Tcells, reduction = "umap", pt.size = 0.8, group.by = "updated.cell.types")
+plot_grid(p1, p2)
+
+
+```
+
+
+T cells: Cell type gene markers
+```{r}
+#gene markes from Hashimoto et al 2019 PNAS
+#T cell markers
+FeaturePlot(Tcells, features = c("CD3D","CD3E","IL7R","CCR7","S100A4","CD8A","CD8B"))
+#cytotoxic
+FeaturePlot(Tcells, features = c("GZMH","GZMB","GZMA","PRF1"))
+#noncytotoxic
+FeaturePlot(Tcells, features = c("CCR7","SELL","LEF1","TCF7"))
+
+
+
+#FindMarkers
+Tcells.markers <- FindAllMarkers(Tcells, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+top50_Tcells <- Tcells.markers %>% group_by(cluster) %>% top_n(n = 50, wt = avg_logFC)
+write.csv(Tcells.markers, "Tcell_markers.csv")
+write.csv(top50_Tcells, "top50_Tcells.csv")
+
+#Dotplot of gene markers
+DotPlot(Tcells, features = c("CCR7","SELL","LEF1","CREM","GAPDH","FOXP3","CD74","NKG7","GZMB","HLA.DRB1","HLA.DRA","CCL2")) + RotatedAxis()
+```
+
+Module Scores
+-CIBERSORT genesets
+```{r}
+biocarta <- lapply(1:length(Biocarta), function(x){biocarta <- make.names(Biocarta[[x]])})
+names(biocarta) <- names(Biocarta)
+Tcells1 <- AddModuleScore(Tcells, features = CIBERSORT_genesets, name = names(CIBERSORT_genesets))
+
+VlnPlot(Tcells1, features = colnames(Tcells1@meta.data)[c(18)])
+cell.types <- levels(Tcells1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Tcells1) <- "seurat_clusters"
+  Tcells1 <- subset(Tcells1, idents = c(cell.types[x]))
+  group <- Tcells1$seurat_clusters
+  meta.data <- Tcells1@meta.data[c(18:39)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Tcells1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Tcells1) <- "seurat_clusters"
+  Tcells1 <- subset(Tcells1, idents = c(cell.types[x]))
+  group <- Tcells1$seurat_clusters
+  meta.data <- Tcells1@meta.data[c(22, 26:29)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Tcells1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Tcells1) <- "seurat_clusters"
+  Tcells1 <- subset(Tcells1, idents = c(cell.types[x]))
+  group <- Tcells1$seurat_clusters
+  meta.data <- Tcells1@meta.data[c(18:44)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Tcells1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+```
+
+Set subpopulations
+```{r}
+#NK: 2,9
+#CD8: 4,7,8
+#CD4 Naive: 1,3
+#CD4 Memory: 0, 5,6
+#Mono: 10
+#HSC: 11
+
+Idents(Tcells) <- "seurat_clusters"
+new.cluster.ids <- c("CD4 Naive", "CD4 Memory", "NK","CD4 Memory", "CD8", "CD4 Naive", "CD4 Naive","CD8", "CD8", "NK", "M14","HSC")
+
+names(new.cluster.ids) <- levels(Tcells)
+Tcells <- RenameIdents(Tcells, new.cluster.ids)
+
+Tcells$subpop <- Idents(Tcells)
+
+saveRDS(Tcells, file = "/restricted/projectnb/montilab-p/projects/longevity/natgen2018/data/Lymphocytes.rds")
+
+#cell type proportions
+table_age <- prop.table(table(Tcells$subpop, Tcells$sample.ID), margin = 1)
+
+require(reshape2)
+table_age <- melt(table_age)
+colnames(table_age) <- c("subpop","sample", "% of cells")
+
+Age <- unlist(sapply(1:nrow(table_age), function(x){Metadata$Age.by.decade..1.1.2017.[Metadata$Sample %in% table_age$sample[x]]}))
+
+table_age <- as.data.frame(table_age)
+
+table_age$age <- Age
+
+p3 <- ggplot(table_age, aes(age, `% of cells`)) + geom_boxplot(aes(color = age )) + facet_wrap(.~`subpop`, scales = "free_y")
+p3 <- p3 + scale_color_manual(values=RColorBrewer::brewer.pal(n = 8, name = "PRGn")[c(1:3,6:8)])
+```
+
+
+B cells
+Top 2000 variable genes and run PCA analysis
+```{r}
+
+B <-  FindVariableFeatures(B, selection.method = "vst", nfeatures = 2000) %>%
+            ScaleData(features = row.names(B))
+
+
+B <- RunPCA(B, features = VariableFeatures(B), npcs = 50)
+            
+saveRDS(B, file = "./B.rds")
+
+
+ElbowPlot(object = B, ndims = 30)
+DimHeatmap(B, dims = 1:12, cells = 500, balanced = TRUE)
+
+```
+
+B cells: Cluster and visualize original cell types using tSNE.
+PCs selected: 5
+```{r }
+
+B <- B %>%
+          FindNeighbors(reduction = "pca", dims = 1:10) %>% 
+          FindClusters(resolution = 0.5) %>%
+          RunUMAP(B, reduction = "pca", dims = 1:10)
+
+saveRDS(B, file = "/restricted/projectnb/montilab-p/projects/longevity/natgen2018/data/B.rds")
+
+# Projecting singlet identities on TSNE visualization
+p1 <- DimPlot(B, reduction = "umap", pt.size = 1.5, group.by = "seurat_clusters")
+p2 <- DimPlot(B, group.by = "updated.cell.types", reduction = "umap", pt.size = 1.5)
+plot_grid(p1, p2)
+
+#B naive: 0,4
+#B memory: 1
+#Plasma: 3
+#Dendritic: 2
+
+```
+
+B cells: Cell type gene markers
+```{r}
+#gene markers from Hashimoto et al 2019 PNAS
+FeaturePlot(B, features = c("CD27","CD38","IGHD","MS4A1","TCL1A","IGHG1","IGHM","IGHA1","IL2RA"))
+
+#FindMarkers
+Idents(B) <- "RNA_snn_res.0.5"
+B.markers <- FindAllMarkers(B, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+top20_B <- B.markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_logFC)
+write.csv(top20_B, "top20_B.csv")
+
+#Dotplot of gene markers
+DotPlot(B, features = c("CD79A","CD79B","MS4A1","CXCR4","TCL1A","TNFRSF13B","CD27","CREM","IL2RA","MYC","CCL3","CCL4", "IGJ")) + RotatedAxis()
+
+```
+
+Module Scores
+-CIBERSORT genesets
+```{r}
+biocarta <- lapply(1:length(Biocarta), function(x){biocarta <- make.names(Biocarta[[x]])})
+names(biocarta) <- names(Biocarta)
+B1 <- AddModuleScore(B, features = cibersort, name = names(cibersort))
+
+VlnPlot(Tcells1, features = colnames(Tcells1@meta.data)[c(18)])
+cell.types <- levels(B1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(B1) <- "seurat_clusters"
+  B1 <- subset(B1, idents = c(cell.types[x]))
+  group <- B1$seurat_clusters
+  meta.data <- B1@meta.data[c(18:39)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(B1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Tcells1) <- "seurat_clusters"
+  Tcells1 <- subset(Tcells1, idents = c(cell.types[x]))
+  group <- Tcells1$seurat_clusters
+  meta.data <- Tcells1@meta.data[c(22, 26:29)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Tcells1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+cell.types <- levels(B1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(B1) <- "seurat_clusters"
+  B1 <- subset(B1, idents = c(cell.types[x]))
+  group <- B1$seurat_clusters
+  meta.data <- B1@meta.data[c(18:44)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(B1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+
+```
+
+
+Set subpopulations
+```{r}
+#B naive: 0, 4
+#B memory: 1
+#Plasma: 3
+#CD4 Naive: 2
+Idents(B) <- "seurat_clusters"
+new.cluster.ids <- c("B Naive", "B Memory","CD4 Naive", "Plasma","B Naive" )
+names(new.cluster.ids) <- levels(B)
+B <- RenameIdents(B, new.cluster.ids)
+
+B$subpop <- Idents(B)
+saveRDS(B, file = "./B.rds")
+
+#cell type proportions
+table_age <- table(B$`cell types`, B$`Age`)
+table_age <- melt(table_age)
+colnames(table_age) <- c("cell_types","age", "# of cells")
+p3 <- ggplot(table_age, aes(cell_types, `# of cells`)) + geom_boxplot() 
+p3 <- p3 + geom_point(aes(color = age, size = age))
+p3 <- p3 + scale_color_manual(values=RColorBrewer::brewer.pal(n = 8, name = "PRGn")[c(1:3,6:8)])
+```
+
+
+Myeloid cells
+B cells: Cluster and visualize original cell types using tSNE.
+PCs selected: 5
+```{r }
+Myeloid <-  FindVariableFeatures(Myeloid, selection.method = "vst", nfeatures = 2000) %>%
+            ScaleData(features = row.names(Myeloid))
+
+
+Myeloid <- RunPCA(Myeloid, features = VariableFeatures(Myeloid), npcs = 50)
+            
+  
+ 
+
+saveRDS(Myeloid, file = "./Myeloid.rds")
+
+
+ElbowPlot(object = Myeloid, ndims = 30)
+DimHeatmap(Myeloid, dims = 1:12, cells = 500, balanced = TRUE)
+Myeloid <- Myeloid %>%
+          FindNeighbors(reduction = "pca", dims = 1:10) %>% 
+          FindClusters(resolution = 0.5) %>%
+          RunUMAP(Myeloid, reduction = "pca", dims = 1:10)
+
+saveRDS(Myeloid, file = "./Myeloid.rds")
+
+# Projecting singlet identities on TSNE visualization
+p1 <- DimPlot(Myeloid, reduction = "umap", pt.size = 1.5, group.by = "seurat_clusters", label = T)
+p2 <- DimPlot(Myeloid, group.by = "updated.cell.types", reduction = "umap", pt.size = 1.5)
+plot_grid(p1, p2)
+
+#M14: 0,1,3,6
+#M16: 2
+#mDC: 4
+#pDC: 7
+#MGK: 5, 8
+#Myeloid Progenitor: 5?
+
+```
+
+Module Scores
+-CIBERSORT genesets
+```{r}
+biocarta <- lapply(1:length(Biocarta), function(x){biocarta <- make.names(Biocarta[[x]])})
+names(biocarta) <- names(Biocarta)
+Myeloid1 <- AddModuleScore(Myeloid, features = Liver.Immune, name = names(Liver.Immune))
+
+VlnPlot(Tcells1, features = colnames(Tcells1@meta.data)[c(18)])
+cell.types <- levels(Myeloid1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Myeloid1) <- "seurat_clusters"
+  Myeloid1 <- subset(Myeloid1, idents = c(cell.types[x]))
+  group <- Myeloid1$seurat_clusters
+  meta.data <- Myeloid1@meta.data[c(18:39)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Myeloid1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Tcells1) <- "seurat_clusters"
+  Tcells1 <- subset(Tcells1, idents = c(cell.types[x]))
+  group <- Tcells1$seurat_clusters
+  meta.data <- Tcells1@meta.data[c(22, 26:29)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Tcells1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+cell.types <- levels(Myeloid1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Myeloid1) <- "seurat_clusters"
+  Myeloid1 <- subset(Myeloid1, idents = c(cell.types[x]))
+  group <- Myeloid1$seurat_clusters
+  meta.data <- Myeloid1@meta.data[c(18:44)]
+  #meta.data <- avgGeneExp(Tcell1, CIBERSORT_genesets)
+  plot.sets <- vlnplot(Myeloid1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+
+```
+```{r}
+#M14: 0,1,3,6
+#M16: 2
+#mDC: 4
+#pDC: 7
+#MGK: 8
+#MGK/pro.myeloid: 5
+
+Idents(Myeloid) <- "seurat_clusters"
+new.cluster.ids <- c("M14", "M14","M16", "M14","mDC","Pro.myeloid","M14","pDC","MGK")
+names(new.cluster.ids) <- levels(Myeloid)
+Myeloid <- RenameIdents(Myeloid, new.cluster.ids)
+
+Myeloid$subpop <- Idents(Myeloid)
+saveRDS(Myeloid, file = "./Myeloid.rds")
+```
+
+Add subpopulations back
+```{r}
+
+Idents(PBMC_45) <- "updated.cell.types"
+
+# B naive, B Memory, Plasma
+Idents(B) <- "subpop"
+Idents(PBMC_45, cells=WhichCells(B, idents="B Naive")) <- "BC Naive"
+Idents(PBMC_45, cells=WhichCells(B, idents="B Memory")) <- "BC Memory"
+Idents(PBMC_45, cells=WhichCells(B, idents="Plasma")) <- "Plasma"
+Idents(PBMC_45, cells=WhichCells(B, idents="CD4 Naive")) <- "CD4 T Naive"
+
+
+#CD4 Naive, CD4 Memory, NK, CD8, M14, HSC
+Idents(Tcells) <- "subpop"
+Idents(PBMC_45, cells=WhichCells(Tcells, idents="CD4 Naive")) <- "CD4 T Naive"
+Idents(PBMC_45, cells=WhichCells(Tcells, idents="CD4 Memory")) <- "CD4 T Memory"
+Idents(PBMC_45, cells=WhichCells(Tcells, idents="CD8")) <- "CD8 T"
+Idents(PBMC_45, cells=WhichCells(Tcells, idents="NK")) <- "NK"
+Idents(PBMC_45, cells=WhichCells(Tcells, idents="M14")) <- "M14"
+Idents(PBMC_45, cells=WhichCells(Tcells, idents="HSC")) <- "HSC"
+
+#M14, M16, mDC, HSC, pDC, MGK
+Idents(Myeloid) <- "subpop"
+Idents(PBMC_45, cells=WhichCells(Myeloid, idents="M14")) <- "M14"
+Idents(PBMC_45, cells=WhichCells(Myeloid, idents="M16")) <- "M16"
+Idents(PBMC_45, cells=WhichCells(Myeloid, idents="mDC")) <- "mDC"
+Idents(PBMC_45, cells=WhichCells(Myeloid, idents="pDC")) <- "pDC"
+Idents(PBMC_45, cells=WhichCells(Myeloid, idents="MGK")) <- "MGK"
+Idents(PBMC_45, cells=WhichCells(Myeloid, idents="Pro.myeloid")) <- "Pro.myeloid"
+
+
+
+PBMC_45$subpop <- Idents(PBMC_45)
+
+saveRDS(PBMC_45, file = "/restricted/projectnb/montilab-p/projects/longevity/scCentenarian/Public_Reanalysis/natgen2018/data/natgen2018.v2.rds")
+
+
+#Dotplot of gene markers
+DotPlot(PBMC_45, features = c("CD3D", "CD3G", "TRAC", #tcells
+                              "CD8A","CD8B","TRDC",
+                     "CD19", "CD79A", "MSA41", #bcells
+                     "GZMB","KLRF1","GNLY", "NKG7", #nk cells
+                     "CD14","FCGR3A","S100A8", "S100A12","CD163", #monocytes
+                     "HBA1","HBD1", "HBA2", "HBB", #erythrocytes
+                     "MALAT1", 
+                     "MKI67","CDK1", #MKI 
+                     "HLA.DQA1", "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                     "ClEC4C","ITGB3","CMTM5","PPBP", "GNG11", #megakaryocytes
+                     "IGJ", "MZB1") #plasma cells
+) + RotatedAxis()
+```

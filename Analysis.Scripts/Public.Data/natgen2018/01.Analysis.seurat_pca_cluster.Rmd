@@ -1,0 +1,177 @@
+---
+title: "Seurat clustering and analysis of scRNA-seq of PBMCs from 45 healthy individuals"
+author: "Tanya Karagiannis"
+date: "01/16/20"
+output: html_document
+---
+
+Seurat 3
+R/3.6.0
+
+
+Purpose: 
+Reanalyze the scRNA-seq data from natgen2018 paper
+
+
+Load libraries and processed data
+```{r}
+suppressMessages(
+c(library(readr),
+library(dplyr),
+library(Seurat),
+library(reshape2),
+library(Matrix),
+library(useful),
+library(cowplot),
+library(umap))
+)
+Metadata <- read.delim("/restricted/projectnb/montilab-p/CBMrepositoryData/scRNAseq/longevity/natgen2018/raw/Metadata.txt")
+PBMC_45 <- readRDS(file = "/restricted/projectnb/montilab-p/CBMrepositoryData/scRNAseq/longevity/natgen2018/processed/processed_natgen2018.rds")
+```
+
+Cluster and visualize original cell types using tSNE.
+Selected first 16 PCs based on significance from spree plot (parameter from original analysis)
+```{r }
+
+PBMC_45 <- RunPCA(PBMC_45, features = VariableFeatures(PBMC_45))
+
+#PBMC_45 <- PBMC_45 %>% 
+#            FindNeighbors(dims = 1:16) %>%
+#            FindClusters(PBMC_45, resolution = 0.5)
+
+PBMC_45 <- RunTSNE(PBMC_45, reduction = "pca", dims = 1:16)
+#PBMC_45 <- RunUMAP(PBMC_45, reduction = "pca", dims = 1:16)
+
+saveRDS(PBMC_45, file = "/restricted/projectnb/montilab-p/projects/longevity/natgen2018/data/natgen2018.rds")
+
+# Projecting singlet identities on TSNE visualization
+p1 <- DimPlot(PBMC_45, group.by = "updated.cell.types",reduction = "tsne")
+p2 <- DimPlot(PBMC_45, group.by = "sample.ID", reduction = "tsne")
+plot_grid(p1, p2)
+```
+
+Average expression of gene markers based on original cell types identified
+```{r}
+Idents(PBMC_45) <- "orig.cell.types"
+ct <- rev(c("CD4+ T", "CD8+ T","CD56(bright) NK","CD56(dim) NK","B","cMonocyte","ncMonocyte","mDC","Megakaryocyte","Plasma","pDC"))
+
+Idents(PBMC_45) <- factor(Idents(PBMC_45), levels = ct )
+
+markers.to.plot <- c("CD3D", "CREM", "HSPH1", "SELL", "GIMAP5", "CACYBP", "GZMB","KLRC1","GNLY", "NKG7", "CCL5", 
+                     "CD8A", "MS4A1", "CD79A", "MIR155HG", "NME1", "FCGR3A", "VMO1", "CCL2", "S100A9", "HLA.DQA1", 
+                     "GPR183", "PPBP", "GNG11", "HBA2", "HBB","TSPAN13", "IL3RA", "IGJ", "MZB1")
+DotPlot(PBMC_45, features = rev(markers.to.plot), dot.scale = 8) + RotatedAxis()
+
+```
+
+Average expression of gene markers based on updated cell type identification
+-based on gsva results
+```{r}
+Idents(PBMC_45) <- "updated.cell.types"
+ct <- rev(c("CD4+ T", "CD8+ T","CD56(bright) NK","CD56(dim) NK","B","cMonocyte","ncMonocyte","mDC","Megakaryocyte","Plasma","pDC"))
+
+Idents(PBMC_45) <- factor(Idents(PBMC_45), levels = ct )
+
+markers.to.plot <- c("CD3D", "CREM", "HSPH1", "SELL", "GIMAP5", "CACYBP", "GZMB","KLRC1","GNLY", "NKG7", "CCL5", 
+                     "CD8A", "MS4A1", "CD79A", "MIR155HG", "NME1", "FCGR3A", "VMO1", "CCL2", "S100A9", "HLA.DQA1", 
+                     "GPR183", "PPBP", "GNG11", "HBA2", "HBB","TSPAN13", "IL3RA", "IGJ", "MZB1")
+DotPlot(PBMC_45, features = rev(markers.to.plot), dot.scale = 8) + RotatedAxis()
+
+```
+
+Cell type gene markers
+```{r}
+FeaturePlot(PBMC_45, features = c("CD3D","CD8A","GZMB","KLRC1","CD14","FCGR3A","MS4A1","CD79A","ITGAX","PPBP"))
+
+```
+
+Combine age groups in order to have similar number of samples per age group 
+```{r}
+Idents(PBMC_45) <- "Age"
+
+Idents(PBMC_45, cells = WhichCells(PBMC_45, idents = c("20-29"))) <- "20-39"
+Idents(PBMC_45, cells = WhichCells(PBMC_45, idents = c("30-39"))) <- "20-39"
+Idents(PBMC_45, cells = WhichCells(PBMC_45, idents = c("60-69"))) <- "60-79"
+Idents(PBMC_45, cells = WhichCells(PBMC_45, idents = c("70-79"))) <- "60-79"
+PBMC_45$comb.age <- Idents(PBMC_45)
+
+saveRDS(PBMC_45, file = "/restricted/projectnb/montilab-p/projects/longevity/natgen2018/data/natgen2018.rds")
+```
+
+Number of samples per age group
+```{r}
+table_samples <- table(Metadata$Sample, Metadata$Age.by.decade..1.1.2017.)
+table_samples <- colSums(table_samples)
+table_samples <- as.data.frame(table_samples)
+
+table_samples <- tibble::rownames_to_column(table_samples, "age")
+colnames(table_samples) <- c("age", "num.samples")
+table_samples
+
+ggplot(table_samples, aes(age, num.samples)) + geom_bar(stat = "identity", aes(fill = age),  color = "black") +
+  scale_fill_manual(values=RColorBrewer::brewer.pal(n = 8, name = "PRGn")[c(1:3,6:8)]) + 
+  geom_text(aes(label=num.samples), vjust=1.6, color="black",position = position_dodge(0.9), size=10) +
+  #theme(text = element_text(size = 20)) +
+  theme_classic(base_size = 20)
+
+
+```
+
+
+Number of cells per sample
+```{r}
+table_cells <- table(PBMC_45$sample.ID, PBMC_45$orig.ident)
+table_cells <- as.data.frame(table_cells)
+
+colnames(table_cells) <- c("sample.ID", "project","num.cells")
+
+#add back age
+Age <- unlist(sapply(1:nrow(table_cells), function(x){Metadata$Age.by.decade..1.1.2017.[Metadata$Sample %in% table_cells$sample.ID[x]]}))
+table_cells$age <- Age
+
+#ggplot number of cells for all samples
+ggplot(table_cells, aes(age, num.cells)) + geom_bar(stat = "identity", aes(group = sample.ID, fill = age), color = "black", position = "dodge") +
+  scale_fill_manual(values=RColorBrewer::brewer.pal(n = 8, name = "PRGn")[c(1:3,6:8)]) + 
+  theme_classic(base_size = 20) +
+  ylim(0, 1500)
+
+
+
+```
+
+Proportion of cell types for each sample grouped by age
+```{r}
+
+#cell type proportion for each sample
+table_age <- prop.table(table(PBMC_45@meta.data$updated.cell.types, PBMC_45@meta.data$sample.ID), margin = 2)
+
+#reshape data
+table_age <- melt(table_age)
+colnames(table_age) <- c("cell.types","sample.ID","prop")
+
+#Add back age
+#Set based on combined age groups
+Age <- unlist(sapply(1:nrow(table_age), function(x){Metadata$Age.by.decade..1.1.2017.[Metadata$Sample %in% table_age$sample.ID[x]]}))
+
+table_age <- as.data.frame(table_age)
+
+table_age$age <- Age
+table_age$age <- as.character(table_age$age)
+table_age$age[which(table_age$age == "20-29")] <- "20-39"
+table_age$age[which(table_age$age == "30-39")] <- "20-39"
+table_age$age[which(table_age$age == "60-69")] <- "60-79"
+table_age$age[which(table_age$age == "70-79")] <- "60-79"
+
+#ggplot cell type proportions for each sample based on age group
+p3 <- ggplot(table_age, aes(age, prop)) + geom_boxplot(aes(fill = age )) + geom_point() + facet_wrap(~cell.types, scales = "free_y") + theme_classic(base_size = 20) + theme(axis.line=element_line()) + stat_compare_means(method = "anova")
+p3 <- p3 + scale_fill_manual(values=RColorBrewer::brewer.pal(n = 8, name = "PRGn")[c(1,3,6,8)])
+
+p3
+
+```
+
+
+```{r}
+sessionInfo()
+
+```
