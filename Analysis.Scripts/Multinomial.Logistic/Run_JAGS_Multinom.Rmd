@@ -1,0 +1,794 @@
+---
+title: "Cell type specific composition analysis across age groups of the human lifespan: Multinomial Logistic Regression"
+output: html_document
+---
+
+Summary:
+
+- Apply multinomial logistic regression model (RJAGS) to cell counts of samples across cell types 
+- Output: Cell type specific probability estimates of composition per age group/sex, and significance of age group effect (reference level = Younger Age) and sex (reference level = Male)
+
+Set work directory and load libraries
+```{r}
+work.dir <- "/restricted/projectnb/uh2-sebas/analysis/scCentenarians/"
+
+library(dplyr)
+library(Seurat)
+library(rjags)
+library(tidyverse)
+library(hablar)
+```
+
+Setup data for rjags
+```{r}
+#load and integrate datasets
+pbmc.combined <- readRDS(file = paste0(work.dir,"/Integrated_Data/pbmc.combined.rds"))
+
+#Create table of cell type abundances across samples
+cell_counts <- table(pbmc.combined@meta.data$sample.ID, pbmc.combined@meta.data$ct.consensus)
+
+#Get Age information
+sample.names <- rownames(cell_counts)
+
+#Add age information to data
+
+#dummy variable for the four age groups across the human lifespan 
+#four age groups
+pbmc.combined@meta.data$age.quartiles <- factor(pbmc.combined@meta.data$age.quartiles, levels = c("20-39", "40-59", "60-89","Extreme Longevity"))
+age.group <- sapply(1:nrow(cell_counts), function(x){unique(pbmc.combined@meta.data$age.quartiles[pbmc.combined@meta.data$sample.ID %in% rownames(cell_counts)[x]])})
+levels(age.group) <- c(1,2,3,4)
+
+#dummy variable for sex
+pbmc.combined@meta.data$sex <- as.factor(pbmc.combined@meta.data$sex)
+pbmc.combined@meta.data$sex <-  relevel(pbmc.combined@meta.data$sex, "Male")
+sex <- sapply(1:nrow(cell_counts), function(x){unique(pbmc.combined@meta.data$sex[pbmc.combined@meta.data$sample.ID %in% rownames(cell_counts)[x]])})
+levels(sex) <- c(1,2)
+
+
+rjags_data <- list(y = cell_counts, 
+             N.sample = nrow(cell_counts),
+             N.ct = ncol(cell_counts), 
+             N.total = apply(cell_counts, 1, sum),
+             N.age = length(levels(age.group)),
+             age.group = age.group, #age group for each sample
+             sex = sex # sex for each sample
+)
+saveRDS(rjags_data, paste0(work.dir,"/Composition_Multinomial/RJAGS_Composition_Analysis/cell_counts.rds"))
+
+rjags_data
+```
+
+Run multinomial logistic regression model
+```{r}
+set.seed(562)
+#load model
+source(paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/model_multinom.R"))
+#Run model with 500 burnin iterations and 1000 total iterations
+jags <- jags.model(textConnection(multinom.model),data=rjags_data, n.adapt=500, inits = list(.RNG.name = "base::Wichmann-Hill", .RNG.seed = 3))
+#monitor age group effect b1 and predicted probabilities p
+coda.model <- coda.samples(jags, c("b1","b2","p"), n.iter=1000)
+#coda.model <- coda.samples(jags, c("b1"), n.iter=5000)
+
+saveRDS(coda.model, paste0(work.dir, "Composition_Multinomial/RJAGS_Composition_Analysis/rjags_coda_estimates.rds"))
+```
+
+Age group effects
+
+- comparing Middle, Older, and EL age groups to Younger age
+```{r}
+coda.summary <- summary(coda.model)
+#extract age effects for each cell type
+#mean estimate for b1[age.group, cell type]
+#Middle v. Younger
+b1.pos <- grep("b1", names(coda.summary$statistics[,"Mean"]))
+b1.names <- names(coda.summary$statistics[b1.pos,"Mean"])
+b1.effects <- coda.summary$statistics[,c("Mean", "SD")][b1.pos,] %>%
+                as_tibble(rownames = "coef") %>%
+                mutate("cell.type" = c(sapply(1:rjags_data$N.ct,function(x) rep(colnames(rjags_data$y)[x],rjags_data$N.age))), 
+                       "age.group" = rep(c("Younger.Ref","Middle.v.Younger", "Older.v.Younger", "EL.v.Younger"), rjags_data$N.ct)
+                       ) %>%
+                filter(age.group != "Younger.Ref") %>%
+                mutate("zscore" = Mean/SD,
+                       "pval" = 2*(1-pnorm(abs(zscore))),
+                       "fdr" = p.adjust(pval,method="BH")
+                       ) %>%
+                dplyr::select(coef, cell.type, age.group, Mean, SD, zscore, pval, fdr)
+b1.effects
+
+#write.csv(b1.effects, paste0(work.dir, "Composition_Multinomial/RJAGS_Composition_Analysis/b1.effects.csv"))
+```
+Heatmap of age coefficients
+```{r}
+ct_order <- c("CD4 T Naive", "CD4 T Memory", "CD4 T Cytotoxic", "CD8 T", "T gamma delta", "NK","BC Naive", "BC Memory", "Plasma", "M14", "M16", "mDC", "pDC")
+
+b1.mat <- b1.effects %>% 
+  select(cell.type, age.group, Mean) %>% 
+  spread(key = age.group, value = Mean) %>% 
+  relocate(EL.v.Younger, .after = Older.v.Younger) %>%
+   arrange(factor(cell.type, levels = ct_order)) 
+
+b1.mat
+
+library(circlize)
+col_fun <- colorRamp2(c(-2, 0, 2), c("blue", "white", "red"))
+row_col <- c("cadetblue2",
+            "cornflowerblue",
+            "blue2",
+            "aquamarine3",
+            "turquoise4",
+            "seagreen",
+            "mediumpurple2",
+            "purple2",
+            "darkorchid4",
+            "pink2",
+            "red3",
+            "sienna2",
+            "yellow2")
+names(row_col) <- ct_order
+library(ComplexHeatmap)
+
+column_ha <- HeatmapAnnotation(comparison = c("Middle.v.Younger", "Older.v.Younger", "EL.v.Younger"), col = list(comparison = c("Middle.v.Younger"= "grey","Older.v.Younger"="grey", "EL.v.Younger"="grey")))
+row_ha <- rowAnnotation(cell.type = ct_order , col = list(cell.type = row_col))
+
+b1.heatmap <- ComplexHeatmap::Heatmap(b1.mat[2:4], col = col_fun, name = "age coefficient", cluster_rows = F, cluster_columns = F, top_annotation = column_ha, left_annotation = row_ha)
+
+b1.heatmap
+```
+
+Sex effects
+
+- comparing Females compared to Males
+```{r}
+#extract sex effects for each cell type
+#mean estimate for b2[sex, cell type]
+b2.pos <- grep("b2", names(coda.summary$statistics[,"Mean"]))
+b2.names <- names(coda.summary$statistics[b2.pos,"Mean"])
+b2.effects <- coda.summary$statistics[,c("Mean", "SD")][b2.pos,] %>%
+                as_tibble(rownames = "coef") %>%
+                mutate("cell.type" = c(sapply(1:rjags_data$N.ct,function(x) rep(colnames(rjags_data$y)[x],2))), 
+                       "sex" = rep(c("Male","Female.v.Male"), rjags_data$N.ct)
+                       ) %>%
+                filter(Mean != 0 & SD != 0) %>%
+                mutate("zscore" = Mean/SD,
+                       "pval" = 2*(1-pnorm(abs(zscore))),
+                       "fdr" = p.adjust(pval,method="BH")
+                       ) %>%
+                dplyr::select(coef, cell.type, sex, Mean, SD, zscore, pval, fdr)
+b2.effects
+
+#write.csv(b2.effects, paste0(work.dir, "Composition_Multinomial/RJAGS_Composition_Analysis/b2.effects.csv"))
+```
+
+```{r}
+b2.mat <- b2.effects %>% 
+  select(cell.type, sex, Mean) %>% 
+  spread(key = sex, value = Mean) %>% 
+  #relocate(EL.v.Younger, .after = Older.v.Younger) %>%
+   arrange(factor(cell.type, levels = ct_order)) 
+
+b2.mat
+
+library(circlize)
+col_fun <- colorRamp2(c(-2, 0, 2), c("blue", "white", "red"))
+row_col <- c("cadetblue2",
+            "cornflowerblue",
+            "blue2",
+            "aquamarine3",
+            "turquoise4",
+            "seagreen",
+            "mediumpurple2",
+            "purple2",
+            "darkorchid4",
+            "pink2",
+            "red3",
+            "sienna2",
+            "yellow2")
+names(row_col) <- ct_order
+library(ComplexHeatmap)
+
+column_ha <- HeatmapAnnotation(comparison = c("Female.v.Male"), col = list(comparison = c("Female.v.Male"= "grey")))
+row_ha <- rowAnnotation(cell.type = ct_order , col = list(cell.type = row_col))
+
+b2.heatmap <- ComplexHeatmap::Heatmap(b2.mat[2], col = col_fun, name = "sex coefficient", cluster_rows = F, cluster_columns = F, top_annotation = column_ha, left_annotation = row_ha)
+
+b2.heatmap
+
+```
+
+# Extract cell type specific predicted probabilities and credible intervals
+
+## Predicted probabilities
+```{r}
+#extract probabilities and create matrix with rows as samples and columns as cell types
+#Extract mean and SE
+predicted.estimate <- coda.summary$statistics[,c("Mean", "SD")][-c(b1.pos, b2.pos),] %>%
+                as_tibble(rownames = "coef") %>%
+                mutate("sample.ID" = rep(rownames(rjags_data$y), rjags_data$N.ct),
+                  "cell.type" = c(sapply(1:rjags_data$N.ct,function(x) rep(colnames(rjags_data$y)[x],rjags_data$N.sample))), 
+                  "age.group" = rep(rjags_data$age.group, rjags_data$N.ct),
+                  "sex" = rep(rjags_data$sex, rjags_data$N.ct)
+                       )
+#Extract 95% credible interval
+predicted.credible <- coda.summary$quantiles[,c("2.5%", "97.5%")][-c(b1.pos, b2.pos),] %>%
+                as_tibble(rownames = "coef") %>%
+                mutate("sample.ID" = rep(rownames(rjags_data$y), rjags_data$N.ct),
+                  "cell.type" = c(sapply(1:rjags_data$N.ct,function(x) rep(colnames(rjags_data$y)[x],rjags_data$N.sample))), 
+                       "age.group" = rep(rjags_data$age.group, rjags_data$N.ct),
+                  "sex" = rep(rjags_data$sex, rjags_data$N.ct)
+                  ) %>%
+                rename(CI_2.5 = "2.5%", CI_97.5 = "97.5%")
+
+#merge dataframes together using join
+predicted.prob <- inner_join(predicted.estimate, predicted.credible, by = c("coef", "cell.type", "age.group", "sample.ID", "sex")) %>%
+            hablar::convert(fct(age.group, cell.type, sex))
+            
+            
+            
+predicted.prob
+```
+
+Extract age group and sex levels
+```{r}
+levels(predicted.prob$age.group) <- c("Younger", "Middle", "Older", "EL")
+levels(predicted.prob$sex) <- c("Male", "Female")
+
+predicted.prob$cell.type <- factor(predicted.prob$cell.type, levels = c("CD4 T Naive", "CD4 T Memory", "CD4 T Cytotoxic", "CD8 T", "T gamma delta", "NK", "BC Naive", "BC Memory", "Plasma", "M14", "M16", "mDC", "pDC"))
+
+levels(predicted.prob$cell.type) <- c("CD4 T Naive", "CD4 T Memory", "CD4 T Cytotoxic", "CD8 T Cytotoxic", "T Gamma Delta", "Natural Killer","B Naive", "B Memory", "Plasma", "CD14 Mono", "CD16 Mono", "Myeloid DC", "Plasmacytoid DC")
+
+predicted.prob
+
+#write.csv(predicted.prob, paste0(work.dir, "Composition_Multinomial/RJAGS_Composition_Analysis/predicted.probabilities.csv"))
+```
+
+# Relative proportion of cell types per age group to compare the probability estimates
+
+```{r}
+pbmc.combined <- readRDS(paste0(work.dir, "/Integrated_Data/pbmc.combined.rds"))
+pbmc.combined$ct.consensus <- droplevels(pbmc.combined$ct.consensus)
+
+Idents(pbmc.combined) <- "sex"
+pbmc.male <- subset(pbmc.combined, idents = "Male")
+pbmc.female <- subset(pbmc.combined, idents = "Female")
+
+relative.prop.male <- prop.table(table(cell.type = pbmc.male@meta.data$ct.consensus, age.group = pbmc.male@meta.data$age.quartile), margin = 2) %>%
+                  as_tibble() %>%
+                  rename(proportion = n) %>%
+                  hablar::convert(fct(cell.type, age.group)) %>%
+                  mutate(sex = "Male")
+levels(relative.prop.male$age.group) <- c("Younger", "Middle", "Older", "EL")
+
+
+pbmc.female <- subset(pbmc.combined, idents = "Female")
+
+relative.prop.female <- prop.table(table(cell.type = pbmc.female@meta.data$ct.consensus, age.group = pbmc.female@meta.data$age.quartile), margin = 2) %>%
+                  as_tibble() %>%
+                  rename(proportion = n) %>%
+                  hablar::convert(fct(cell.type, age.group)) %>%
+                  mutate(sex = "Female")
+
+levels(relative.prop.female$age.group) <- c("Younger", "Middle", "Older", "EL")
+
+relative.prop <- bind_rows(relative.prop.male, relative.prop.female) %>%
+                  hablar::convert(fct(sex))
+relative.prop$cell.type <- factor(relative.prop$cell.type, levels = c("CD4 T Naive", "CD4 T Memory", "CD4 T Cytotoxic", "CD8 T", "T gamma delta", "NK", "BC Naive", "BC Memory", "Plasma", "M14", "M16", "mDC", "pDC"))
+
+  
+relative.prop
+```
+
+# Plot cell type probabilities and relative proportions across age groups
+
+## All cell types
+### Estimated Proportions
+
+```{r}
+
+colors <- c("cadetblue2",
+            "cornflowerblue",
+            "blue2",
+            "aquamarine3",
+            "turquoise4",
+            "seagreen",
+            "mediumpurple2",
+            "purple2",
+            "darkorchid4",
+            "pink2",
+            "red3",
+            "sienna2",
+            "yellow2")
+
+predicted.avg <- predicted.prob %>% group_by(cell.type, age.group, sex) %>% summarize(avg_proportion = mean(Mean)) %>% mutate(avg_percent = round(avg_proportion * 100, 2))
+
+plot.barplot <- ggplot(data=predicted.avg, aes(x = age.group, y = avg_proportion, fill = cell.type, label = avg_percent)) +
+        geom_bar(color = "black", stat="identity", position = "stack") + facet_wrap(~sex) +
+  geom_text(aes(label=paste0(sprintf("%1.1f", avg_percent),"%")), position=position_stack(vjust=0.5), colour="black", size = 8) +
+  scale_fill_manual(values = colors ) +
+  theme_classic(base_size = 40) + 
+  theme(axis.line=element_line()) + 
+  xlab("age group") +
+  ylab("estimated proportions") 
+#+
+ # ggtitle("Multinomial Logistic Regression Results") + theme(legend.position = "none")
+#+
+ # ggstyle(scale = 1)
+
+plot.barplot
+
+# ggplot2::ggsave(
+#     filename="Figure_02C_predicted.barplot.pdf",
+#     plot=plot.barplot,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 20,
+#     height=10,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
+### Relative Proportions
+
+```{r}
+
+colors <- c("cadetblue2",
+            "cornflowerblue",
+            "blue2",
+            "aquamarine3",
+            "turquoise4",
+            "seagreen",
+            "mediumpurple2",
+            "purple2",
+            "darkorchid4",
+            "pink2",
+            "red3",
+            "sienna2",
+            "yellow2")
+
+relative.prop <- relative.prop %>% mutate(avg_percent = round(proportion * 100, 2))
+
+plot.relative <- ggplot(data=relative.prop, aes(x = age.group, y = avg_percent, fill = cell.type, label = avg_percent)) +
+        geom_bar(color = "black", stat="identity", position = "stack") + facet_wrap(~sex) +
+  geom_text(aes(label=paste0(sprintf("%1.1f", avg_percent),"%")), position=position_stack(vjust=0.5), colour="black", size = 8) +
+  scale_fill_manual(values = colors ) +
+  theme_classic(base_size = 40) + 
+  theme(axis.line=element_line()) + 
+  xlab("age group") +
+  ylab("proportions") +
+  ggtitle("Relative Proportions (ignoring constraints)") 
+
+#+
+  #ggstyle(scale = 1)
+
+plot.relative
+
+# ggplot2::ggsave(
+#     filename="Figure_02C_predicted.barplot.pdf",
+#     plot=plot.barplot,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 20,
+#     height=10,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
+
+## CD4 T Naive
+```{r, fig.width=20, fig.height=10}
+library(ggplot2)
+plot.multinom <- ggplot(data=predicted.prob %>% filter(cell.type == "CD4 T Naive")) +
+        geom_pointrange(aes(x=age.group, y=Mean, ymin=CI_2.5, ymax=CI_97.5, group=age.group, color=age.group, shape = sex), size = 1)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, scale = 'free') +  
+        xlab("age group") + ylab("composition probability (95% CI)") +
+        theme_bw(base_size = 30)  # use a white background 
+
+ggplot2::ggsave(
+    filename="CD4_T_Naive.pdf",
+    plot=plot.multinom,
+    path=paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/Figures/"),
+    scale=1,
+    width = 10,
+    height=5,
+    units="in",
+    dpi=300
+)
+
+plot.relative <- ggplot(data=relative.prop %>% filter(cell.type == "CD4 T Naive"), aes(age.group, proportion, color = age.group, shape = sex)) +
+        geom_point(size = 4)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, ncol = 4, scale = 'free') +  
+        theme_bw(base_size = 30)  # use a white background 
+
+
+plot.multinom + plot.relative + patchwork::plot_layout(nrow = 1)
+```
+
+## CD4 T Memory
+```{r, fig.width=20, fig.height=10}
+plot.multinom <- ggplot(data=predicted.prob %>% filter(cell.type == "CD4 T Memory")) +
+        geom_pointrange(aes(x=age.group, y=Mean, ymin=CI_2.5, ymax=CI_97.5, group=age.group, color=age.group, shape = sex), size = 1) +
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, scale = 'free') +
+        xlab("age group") + ylab("composition probability (95% CI)") +
+        theme_bw(base_size = 30)  # use a white background 
+
+ggplot2::ggsave(
+    filename="CD4_T_Memory.pdf",
+    plot=plot.multinom,
+    path=paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/Figures/"),
+    scale=1,
+    width = 10,
+    height=5,
+    units="in",
+    dpi=300
+)
+
+plot.relative <- ggplot(data=relative.prop %>% filter(cell.type == "CD4 T Memory"), aes(age.group, proportion)) +
+        geom_point(aes(color = age.group), size = 4)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, ncol = 4, scale = 'free') +  
+        xlab("age group") + ylab("relative proportions") +
+        theme_bw(base_size = 30)  # use a white background 
+
+
+plot.multinom + plot.relative + patchwork::plot_layout(nrow = 1)
+```
+
+## CD4 T Cytotoxic
+```{r, fig.width=20, fig.height=10}
+library(ggplot2)
+plot.multinom <- ggplot(data=predicted.prob %>% filter(cell.type == "CD4 T Cytotoxic")) +
+         geom_pointrange(aes(x=age.group, y=Mean, ymin=CI_2.5, ymax=CI_97.5, group=age.group, color=age.group, shape = sex), size = 1) +
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, scale = 'free') +
+        xlab("age group") + ylab("composition probability (95% CI)") +
+        theme_bw(base_size = 30)   # use a white background 
+
+ggplot2::ggsave(
+    filename="CD4_T_Cytotoxic.pdf",
+    plot=plot.multinom,
+    path=paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/Figures/"),
+    scale=1,
+    width = 10,
+    height=5,
+    units="in",
+    dpi=300
+)
+
+plot.relative <- ggplot(data=relative.prop %>% filter(cell.type == "CD4 T Cytotoxic"), aes(age.group, proportion)) +
+        geom_point(aes(color = age.group), size = 4)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, ncol = 4, scale = 'free') +  
+        xlab("age group") + ylab("relative proportions") +
+        theme_bw(base_size = 30)  # use a white background 
+
+
+plot.multinom + plot.relative + patchwork::plot_layout(nrow = 1)
+```
+
+## CD8 T Cytotoxic
+```{r, fig.width=20, fig.height=10}
+library(ggplot2)
+plot.multinom <- ggplot(data=predicted.prob %>% filter(cell.type == "CD8 T")) +
+        geom_pointrange(aes(x=age.group, y=Mean, ymin=CI_2.5, ymax=CI_97.5, group=age.group, color=age.group, shape = sex), size = 1) +
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, scale = 'free') +
+        xlab("age group") + ylab("composition probability (95% CI)") +
+        theme_bw(base_size = 30)   # use a white background 
+
+ggplot2::ggsave(
+    filename="CD8_T_Cytotoxic.pdf",
+    plot=plot.multinom,
+    path=paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/Figures/"),
+    scale=1,
+    width = 10,
+    height=5,
+    units="in",
+    dpi=300
+)
+
+plot.relative <- ggplot(data=relative.prop %>% filter(cell.type == "CD8 T"), aes(age.group, proportion)) +
+        geom_point(aes(color = age.group), size = 4)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, ncol = 4, scale = 'free') +  
+        xlab("age group") + ylab("relative proportions") +
+        theme_bw(base_size = 30)  # use a white background 
+
+
+plot.multinom + plot.relative + patchwork::plot_layout(nrow = 1)
+```
+
+## B Naive
+```{r, fig.width=20, fig.height=10}
+library(ggplot2)
+plot.multinom <- ggplot(data=predicted.prob %>% filter(cell.type == "BC Naive")) +
+         geom_pointrange(aes(x=age.group, y=Mean, ymin=CI_2.5, ymax=CI_97.5, group=age.group, color=age.group, shape = sex), size = 1) +
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, scale = 'free') +
+        xlab("age group") + ylab("composition probability (95% CI)") +
+        theme_bw(base_size = 30)  # use a white background 
+
+ggplot2::ggsave(
+    filename="B_Naive.pdf",
+    plot=plot.multinom,
+    path=paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/Figures/"),
+    scale=1,
+    width = 10,
+    height=5,
+    units="in",
+    dpi=300
+)
+
+plot.relative <- ggplot(data=relative.prop %>% filter(cell.type == "BC Naive"), aes(age.group, proportion)) +
+        geom_point(aes(color = age.group), size = 4)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, ncol = 4, scale = 'free') +  
+        xlab("age group") + ylab("relative proportions") +
+        theme_bw(base_size = 30)  # use a white background 
+
+
+plot.multinom + plot.relative + patchwork::plot_layout(nrow = 1)
+```
+
+## B Memory
+```{r, fig.width=20, fig.height=10}
+library(ggplot2)
+plot.multinom <- ggplot(data=predicted.prob %>% filter(cell.type == "BC Memory")) +
+         geom_pointrange(aes(x=age.group, y=Mean, ymin=CI_2.5, ymax=CI_97.5, group=age.group, color=age.group, shape = sex), size = 1) +
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, scale = 'free') +
+        xlab("age group") + ylab("composition probability (95% CI)") +
+        theme_bw(base_size = 30)   # use a white background 
+
+ggplot2::ggsave(
+    filename="B_Memory.pdf",
+    plot=plot.multinom,
+    path=paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/Figures/"),
+    scale=1,
+    width = 10,
+    height=5,
+    units="in",
+    dpi=300
+)
+
+plot.relative <- ggplot(data=relative.prop %>% filter(cell.type == "BC Memory"), aes(age.group, proportion)) +
+        geom_point(aes(color = age.group), size = 4)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, ncol = 4, scale = 'free') +  
+        xlab("age group") + ylab("relative proportions") +
+        theme_bw(base_size = 30)  # use a white background 
+
+
+plot.multinom + plot.relative + patchwork::plot_layout(nrow = 1)
+```
+
+## Plasma cells
+```{r, fig.width=20, fig.height=10}
+library(ggplot2)
+plot.multinom <- ggplot(data=predicted.prob %>% filter(cell.type == "Plasma")) +
+         geom_pointrange(aes(x=age.group, y=Mean, ymin=CI_2.5, ymax=CI_97.5, group=age.group, color=age.group, shape = sex), size = 1) +
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, scale = 'free') +
+        xlab("age group") + ylab("composition probability (95% CI)") +
+        theme_bw(base_size = 30)   # use a white background 
+
+ggplot2::ggsave(
+    filename="Plasma.pdf",
+    plot=plot.multinom,
+    path=paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/Figures/"),
+    scale=1,
+    width = 10,
+    height=5,
+    units="in",
+    dpi=300
+)
+
+plot.relative <- ggplot(data=relative.prop %>% filter(cell.type == "Plasma"), aes(age.group, proportion)) +
+        geom_point(aes(color = age.group), size = 4)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, ncol = 4, scale = 'free') +  
+        xlab("age group") + ylab("relative proportions") +
+        theme_bw(base_size = 30)  # use a white background 
+
+
+plot.multinom + plot.relative + patchwork::plot_layout(nrow = 1)
+```
+
+## Natural Killer
+```{r, fig.width=20, fig.height=10}
+library(ggplot2)
+plot.multinom <- ggplot(data=predicted.prob %>% filter(cell.type == "NK")) +
+         geom_pointrange(aes(x=age.group, y=Mean, ymin=CI_2.5, ymax=CI_97.5, group=age.group, color=age.group, shape = sex), size = 1) +
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, scale = 'free') +
+        xlab("age group") + ylab("composition probability (95% CI)") +
+        theme_bw(base_size = 30)   # use a white background 
+
+ggplot2::ggsave(
+    filename="Natural_Killer.pdf",
+    plot=plot.multinom,
+    path=paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/Figures/"),
+    scale=1,
+    width = 10,
+    height=5,
+    units="in",
+    dpi=300
+)
+
+plot.relative <- ggplot(data=relative.prop %>% filter(cell.type == "NK"), aes(age.group, proportion)) +
+        geom_point(aes(color = age.group), size = 4)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, ncol = 4, scale = 'free') +  
+        xlab("age group") + ylab("relative proportions") +
+        theme_bw(base_size = 30)  # use a white background 
+
+
+plot.multinom + plot.relative + patchwork::plot_layout(nrow = 1)
+```
+
+## T gamma delta
+```{r, fig.width=20, fig.height=10}
+library(ggplot2)
+plot.multinom <- ggplot(data=predicted.prob %>% filter(cell.type == "T gamma delta")) +
+          geom_pointrange(aes(x=age.group, y=Mean, ymin=CI_2.5, ymax=CI_97.5, group=age.group, color=age.group, shape = sex), size = 1) +
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, scale = 'free') +
+        xlab("age group") + ylab("composition probability (95% CI)") +
+        theme_bw(base_size = 30)    # use a white background 
+
+ggplot2::ggsave(
+    filename="T_Gamma_Delta.pdf",
+    plot=plot.multinom,
+    path=paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/Figures/"),
+    scale=1,
+    width = 10,
+    height=5,
+    units="in",
+    dpi=300
+)
+
+plot.relative <- ggplot(data=relative.prop %>% filter(cell.type == "T gamma delta"), aes(age.group, proportion)) +
+        geom_point(aes(color = age.group), size = 4)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, ncol = 4, scale = 'free') +  
+        xlab("age group") + ylab("relative proportions") +
+        theme_bw(base_size = 30)  # use a white background 
+
+
+plot.multinom + plot.relative + patchwork::plot_layout(nrow = 1)
+```
+
+## CD14 Monocyte
+```{r, fig.width=20, fig.height=10}
+library(ggplot2)
+plot.multinom <- ggplot(data=predicted.prob %>% filter(cell.type == "M14")) +
+         geom_pointrange(aes(x=age.group, y=Mean, ymin=CI_2.5, ymax=CI_97.5, group=age.group, color=age.group, shape = sex), size = 1) +
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, scale = 'free') +
+        xlab("age group") + ylab("composition probability (95% CI)") +
+        theme_bw(base_size = 30)  # use a white background 
+
+ggplot2::ggsave(
+    filename="CD14_Mono.pdf",
+    plot=plot.multinom,
+    path=paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/Figures/"),
+    scale=1,
+    width = 10,
+    height=5,
+    units="in",
+    dpi=300
+)
+
+plot.relative <- ggplot(data=relative.prop %>% filter(cell.type == "M14"), aes(age.group, proportion)) +
+        geom_point(aes(color = age.group), size = 4)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, ncol = 4, scale = 'free') +  
+        xlab("age group") + ylab("relative proportions") +
+        theme_bw(base_size = 30)  # use a white background 
+
+
+plot.multinom + plot.relative + patchwork::plot_layout(nrow = 1)
+```
+
+## CD16 Monocyte
+```{r, fig.width=20, fig.height=10}
+library(ggplot2)
+plot.multinom <- ggplot(data=predicted.prob %>% filter(cell.type == "M16")) +
+         geom_pointrange(aes(x=age.group, y=Mean, ymin=CI_2.5, ymax=CI_97.5, group=age.group, color=age.group, shape = sex), size = 1) +
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, scale = 'free') +
+        xlab("age group") + ylab("composition probability (95% CI)") +
+        theme_bw(base_size = 30)   # use a white background 
+
+ggplot2::ggsave(
+    filename="CD16_Mono.pdf",
+    plot=plot.multinom,
+    path=paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/Figures/"),
+    scale=1,
+    width = 10,
+    height=5,
+    units="in",
+    dpi=300
+)
+
+plot.relative <- ggplot(data=relative.prop %>% filter(cell.type == "M16"), aes(age.group, proportion)) +
+        geom_point(aes(color = age.group), size = 4)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, ncol = 4, scale = 'free') +  
+        xlab("age group") + ylab("relative proportions") +
+        theme_bw(base_size = 30)  # use a white background 
+
+
+plot.multinom + plot.relative + patchwork::plot_layout(nrow = 1)
+```
+
+## Myeloid DC
+```{r, fig.width=20, fig.height=10}
+library(ggplot2)
+plot.multinom <- ggplot(data=predicted.prob %>% filter(cell.type == "mDC")) +
+         geom_pointrange(aes(x=age.group, y=Mean, ymin=CI_2.5, ymax=CI_97.5, group=age.group, color=age.group, shape = sex), size = 1) +
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, scale = 'free') +
+        xlab("age group") + ylab("composition probability (95% CI)") +
+        theme_bw(base_size = 30)  
+
+ggplot2::ggsave(
+    filename="Myeloid_DC.pdf",
+    plot=plot.multinom,
+    path=paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/Figures/"),
+    scale=1,
+    width = 10,
+    height=5,
+    units="in",
+    dpi=300
+)
+
+plot.relative <- ggplot(data=relative.prop %>% filter(cell.type == "mDC"), aes(age.group, proportion)) +
+        geom_point(aes(color = age.group), size = 4)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, ncol = 4, scale = 'free') +  
+        xlab("age group") + ylab("relative proportions") +
+        theme_bw(base_size = 30)  # use a white background 
+
+
+plot.multinom + plot.relative + patchwork::plot_layout(nrow = 1)
+```
+
+## Plasmacytoid DC
+```{r, fig.width=20, fig.height=10}
+library(ggplot2)
+plot.multinom <- ggplot(data=predicted.prob %>% filter(cell.type == "pDC")) +
+         geom_pointrange(aes(x=age.group, y=Mean, ymin=CI_2.5, ymax=CI_97.5, group=age.group, color=age.group, shape = sex), size = 1) +
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, scale = 'free') +
+        xlab("age group") + ylab("composition probability (95% CI)") +
+        theme_bw(base_size = 30)   # use a white background 
+
+ggplot2::ggsave(
+    filename="Plasmacytoid_DC.pdf",
+    plot=plot.multinom,
+    path=paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/Figures/"),
+    scale=1,
+    width = 10,
+    height=5,
+    units="in",
+    dpi=300
+)
+
+plot.relative <- ggplot(data=relative.prop %>% filter(cell.type == "pDC"), aes(age.group, proportion)) +
+        geom_point(aes(color = age.group), size = 4)+
+  scale_color_manual(values = c("blue2", "green","red", "maroon")) +
+        facet_wrap(~cell.type, ncol = 4, scale = 'free') +  
+        xlab("age group") + ylab("relative proportions") +
+        theme_bw(base_size = 30)  # use a white background 
+
+
+plot.multinom + plot.relative + patchwork::plot_layout(nrow = 1)
+```
+
+
