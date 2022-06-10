@@ -1,0 +1,185 @@
+---
+title: "Figure 1 and corresponding Supplementary Figures"
+author: "Tanya Karagiannis, Stefano Monti, Paola Sebastiani"
+output:
+  html_document:
+    theme: united
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+Functions
+```{r}
+ggstyle <- function(font="Arial", scale=1) {
+  fs <- function(x) x*scale # Dynamic font scaling
+  ggplot2::theme(
+    plot.title = ggplot2::element_text(family=font, size=fs(26), face="bold", color="#222222"),
+    plot.subtitle = ggplot2::element_text(family=font, size=fs(18), margin=ggplot2::margin(0,0,5,0)),
+    plot.caption = ggplot2::element_blank(),
+    legend.position = "right",
+    legend.text.align = 0,
+    legend.background = ggplot2::element_blank(),
+    legend.title = ggplot2::element_blank(),
+    legend.key = ggplot2::element_blank(),
+    legend.text = ggplot2::element_text(family=font, size=fs(18), color="#222222"),
+    axis.title =  ggplot2::element_text(family=font, size=fs(18), color="#222222"),
+    axis.text = ggplot2::element_text(family=font, size=fs(18), color="#222222"),
+    axis.text.x = ggplot2::element_text(margin=ggplot2::margin(5, b=10)),
+    #axis.ticks = ggplot2::element_blank(),
+    axis.line = ggplot2::element_line(color="#222222"),
+    panel.grid.minor = ggplot2::element_blank(),
+    panel.grid.major.y = ggplot2::element_blank(),
+    panel.grid.major.x = ggplot2::element_blank(),
+    panel.background = ggplot2::element_blank(),
+    strip.background = ggplot2::element_rect(fill="white"),
+    strip.text = ggplot2::element_text(size=fs(22), hjust=0)
+  )
+}
+
+```
+
+Load libraries
+Load NECS dataset
+```{r data, include=FALSE}
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(colorspace)
+#source("~/ggstyle.R")
+#source("~/risoink.R")
+
+work.dir <- "/restricted/projectnb/uh2-sebas/analysis/scCentenarians/"
+
+pbmc.necs <- readRDS(paste0(work.dir,"NECS_Analysis/Data/pbmc.necs.rds"))
+
+#factor cell types
+cell.types <- c("CD4 T Naive", "CD4 T Memory","CD4 T Cytotoxic","CD8 T","NK", "BC Naive","BC Memory","M14","M16","mDC","pDC")
+
+pbmc.necs$ct.consensus <- factor(pbmc.necs$ct.consensus, levels = cell.types)
+
+levels(pbmc.necs$ct.consensus) <- c("nCD4TC", "mCD4TC", "cCD4TC","cCD8TC","NK","nBC", "mBC", "M14", "M16", "mDC", "pDC")
+
+#Idents(pbmc.necs) <- "ct.consensus"
+#pbmc.necs <- subset(pbmc.necs, idents = "Megakaryocyte", invert = T)
+
+pbmc.necs$sample.ID <- factor(pbmc.necs$sample.ID)
+pbmc.necs$sample.ID <- factor(pbmc.necs$sample.ID, levels = c(levels(pbmc.necs$sample.ID)[-c(1:2)], levels(pbmc.necs$sample.ID)[1:2]))
+levels(pbmc.necs$sample.ID) <- c("EL1", "EL2", "EL3", "EL4", "EL5", "EL6", "EL7", "CT1", "CT2")
+#levels(pbmc.necs$sample.ID) <- c("ILO_H_8163","ILO_H_1876","ILO_H_5893","ILO_H_8657","ILO_H_7983","ILO_H_3168","ILO_H_6384","ILO_H_8507","ILO_H_1925")
+
+Idents(pbmc.necs) <- "ct.consensus"
+
+#pbmc.necs$ct.consensus <- droplevels(pbmc.necs$ct.consensus)
+#levels(pbmc.necs$ct.consensus)
+```
+
+
+Import integrated dataset
+```{r}
+pbmc.combined <- readRDS(paste0(work.dir, "Integrated_Data/pbmc.combined.rds"))
+
+#factor cell types
+cell.types <- c("CD4 T Naive", "CD4 T Memory","CD4 T Cytotoxic","CD8 T","T gamma delta", "NK",  "BC Naive","BC Memory","Plasma","M14","M16","mDC","pDC")
+
+pbmc.combined$ct.consensus <- factor(pbmc.combined$ct.consensus, levels = cell.types)
+
+levels(pbmc.combined$ct.consensus) <- c("nCD4TC: Naive CD4+ T cells", "mCD4TC: Memory CD4+ T cells", "cCD4TC: Cytotoxic CD4+ T cells","cCD8TC: Cytotoxic CD8+ T cells","gdTC: Gamma Delta T cells","NK: Natural Killer cells","nBC: Naive B cells", "mBC: Memory B cells", "pBC: Plasma B cells","M14: CD14+ Monocytes", "M16: CD16+ Monocytes", "mDC: Myeloid Dendritic cells", "pDC: Plasmacytoid Dendritic cells")
+
+```
+
+
+Figure 1A: UMAP of NECS single cell data
+```{r}
+Idents(pbmc.combined) <- "batch"
+pbmc.sub.necs <- subset(pbmc.combined, idents = c("COHORT.B1", "COHORT.B2"))
+Idents(pbmc.sub.necs) <- "ct.consensus"
+Idents(pbmc.sub.necs)
+
+require(ggforce)
+colors <- c("cadetblue2",
+            "cornflowerblue",
+            "blue2",
+            "aquamarine3",
+            "seagreen",
+            "mediumpurple2",
+            "purple2",
+            "pink2",
+            "red3",
+            "sienna2",
+            "yellow2")
+
+Fig1A.plot <- DimPlot(pbmc.sub.necs, group.by = "ct.consensus") + 
+  scale_colour_manual(values = colors) +
+  theme_classic(base_size = 30) +
+  ggstyle(scale = 1) +
+  #theme_classic(base_size = 60)+
+  theme(legend.position="bottom", legend.box = "horizontal",
+  plot.title = element_blank(), axis.title = element_text(face = "bold")) +
+  guides(color = guide_legend(override.aes = list(size = 6) ) ) +
+  guides(fill=guide_legend(title="cell types")) 
+Fig1A.plot 
+
+
+```
+Figure 1B: UMAP of Integrated single cell datasets
+```{r}
+#visualize
+
+require(ggforce)
+colors <- c("cadetblue2",
+            "cornflowerblue",
+            "blue2",
+            "aquamarine3",
+            "turquoise4",
+            "seagreen",
+            "mediumpurple2",
+            "purple2",
+            "darkorchid4",
+            "pink2",
+            "red3",
+            "sienna2",
+            "yellow2")
+
+Fig1B.plot <- DimPlot(pbmc.combined, group.by = "ct.consensus") + 
+  scale_colour_manual(values = colors) +
+  theme_classic(base_size = 30) +
+  ggstyle(scale = 1) +
+  #theme_classic(base_size = 60)+
+  theme(plot.title = element_blank(), axis.title = element_text(face = "bold")) +
+  theme(legend.position="bottom", legend.box="horizontal", legend.margin=margin(), legend.text=element_text(size=15)) +
+  guides(color = guide_legend(nrow = 9, override.aes = list(size = 6) ))
+Fig1B.plot 
+
+```
+
+
+Figure panel and save
+```{r}
+Figure.legend <- cowplot::get_legend(Fig1B.plot)
+
+Fig1A.plot <- Fig1A.plot + theme(legend.position = "none")
+Fig1B.plot <- Fig1B.plot + theme(legend.position = "none")
+
+require(patchwork)
+
+fig1.plot <- (Fig1A.plot + Fig1B.plot) / Figure.legend  + plot_annotation(tag_levels = "A", tag_sep = c(F,F,T)) 
+#+ patchwork::plot_layout(nrow = 2, ncol = 2,  heights = unit(c(10, 1), c('cm', 'null')))
+
+fig1.plot
+
+
+ggplot2::ggsave(
+    filename="Figure1.pdf",
+    plot=p3,
+    path="./ScCentenarian_Figures",
+    scale=1,
+    width=297,
+    height=210,
+    units="mm",
+    dpi=300
+)
+
+```
+
+

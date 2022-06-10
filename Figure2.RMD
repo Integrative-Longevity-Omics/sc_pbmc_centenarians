@@ -1,0 +1,346 @@
+---
+title: "Figure 2"
+author: "Tanya Karagiannis, Stefano Monti, Paola Sebastiani"
+output:
+  html_document:
+    theme: united
+    toc: yes
+---
+
+Functions
+```{r}
+ggstyle <- function(font="Arial", scale=1) {
+  fs <- function(x) x*scale # Dynamic font scaling
+  ggplot2::theme(
+    plot.title = ggplot2::element_text(family=font, size=fs(26), face="bold", color="#222222"),
+    plot.subtitle = ggplot2::element_text(family=font, size=fs(18), margin=ggplot2::margin(0,0,5,0)),
+    plot.caption = ggplot2::element_blank(),
+    legend.position = "right",
+    legend.text.align = 0,
+    legend.background = ggplot2::element_blank(),
+    legend.title = ggplot2::element_blank(),
+    legend.key = ggplot2::element_blank(),
+    legend.text = ggplot2::element_text(family=font, size=fs(18), color="#222222"),
+    axis.title =  ggplot2::element_text(family=font, size=fs(18), color="#222222"),
+    axis.text = ggplot2::element_text(family=font, size=fs(18), color="#222222"),
+    axis.text.x = ggplot2::element_text(margin=ggplot2::margin(5, b=10)),
+    #axis.ticks = ggplot2::element_blank(),
+    axis.line = ggplot2::element_line(color="#222222"),
+    panel.grid.minor = ggplot2::element_blank(),
+    panel.grid.major.y = ggplot2::element_blank(),
+    panel.grid.major.x = ggplot2::element_blank(),
+    panel.background = ggplot2::element_blank(),
+    strip.background = ggplot2::element_rect(fill="white"),
+    strip.text = ggplot2::element_text(size=fs(22), hjust=0)
+  )
+}
+
+```
+
+Load libraries
+Load NECS dataset
+```{r data, include=FALSE}
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(colorspace)
+library(tidyverse)
+#source("~/ggstyle.R")
+#source("~/risoink.R")
+
+work.dir <- "/restricted/projectnb/uh2-sebas/analysis/scCentenarians/"
+```
+
+Figure 2A
+```{r}
+#cell type proportions
+ct_prop <- read_csv(paste0(work.dir,"CellTypeDistribution/CellTypeProportions.Subtypes.csv"))
+
+#cell type colors
+colors <- c("cadetblue2",
+            "cornflowerblue",
+            "blue2",
+            "aquamarine3",
+            "turquoise4",
+            "seagreen",
+            "mediumpurple2",
+            "purple2",
+            "darkorchid4",
+            "pink2",
+            "red3",
+            "sienna2",
+            "yellow2")
+
+ct_prop$cell.types <- factor(ct_prop$cell.types, levels=c("CD4 T Naive","CD4 T Memory","CD4 T Cytotoxic","CD8 T","T gamma delta", "NK","BC Naive","BC Memory","Plasma", "M14","M16","mDC","pDC"))
+levels(ct_prop$cell.types) <- c("nCD4TC", "mCD4TC", "cCD4TC","cCD8TC","gdTC", "NK","nBC", "mBC", "pBC","M14", "M16", "mDC", "pDC")
+
+age.groups <- c("Younger","Middle", "Older", "EL")
+  
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]), aes(interaction(sample.ID, age.group), proportion)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), color = "black", stat="identity", position = "stack") +
+  scale_fill_manual(values = colors ) +
+  theme_classic(base_size = 40) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("proportions in PBMCs") +
+  facet_wrap(~ age) + 
+  ggstyle(scale = 1.5) +
+  theme(axis.text.x=element_blank(), 
+        axis.title = element_text(face = "bold"), 
+        strip.text.x = element_text(face = "bold"),
+        axis.ticks.x=element_blank(), 
+        legend.position = "left") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]), aes(interaction(sample.ID, age.group), proportion)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), color = "black", stat="identity", position = "stack") +
+ scale_fill_manual(values = colors) +
+  theme_classic(base_size = 40) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  facet_wrap(~ age) + 
+  ggstyle(scale = 1.5) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.title = element_text(face = "bold"),
+        axis.ticks.x=element_blank(),
+        #axis.ticks.y=element_blank(),
+        strip.text.x = element_text(face = "bold"),
+        legend.position = "none") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]), aes(interaction(sample.ID, age.group), proportion)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), color = "black", stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 40) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  facet_wrap(~ age) + ggstyle(scale = 1.5) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.x=element_blank(),
+        #axis.ticks.y=element_blank(),
+        axis.title = element_text(face = "bold"),
+        strip.text.x = element_text(face = "bold"),
+        legend.position = "none") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]), aes(interaction(sample.ID, age.group), proportion)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), color = "black", stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 40) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  facet_wrap(~ age) + 
+  ggstyle(scale = 1.5) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.title = element_text(face = "bold"),
+        axis.ticks.x=element_blank(),
+        #axis.ticks.y=element_blank(),
+        strip.text.x = element_text(face = "bold"), 
+        legend.position = "none") 
+
+require(patchwork)
+norm.plot <- p1 + p2 + p3 + p4  + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+# ggplot2::ggsave(
+#     filename="Figure_02B_subtype.prop.pdf",
+#     plot=norm.plot,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 20,
+#     height=8,
+#     units="in",
+#     dpi=300
+# )
+```
+
+Figure 2B
+```{r}
+#diversity statistic across samples
+div.res <- read_csv(paste0(work.dir,"CellTypeDistribution/CellType.Diversity.SubtypesAggregated.csv"))
+
+div.res$age <- factor(div.res$age, levels = c("Younger Age", "Middle Age", "Older Age", "Extreme Longevity"))
+levels(div.res$age) <- c("Younger", "Middle", "Older", "EL")
+
+#Box plots of cell type diversity of samples grouped by age group and colored by age group
+
+plot.ctds <- ggplot(div.res, aes(age, entropy)) + geom_boxplot(aes(fill = age)) + 
+  theme_classic(base_size = 20) + 
+  theme(axis.line=element_line()) + 
+  #ylim(-1, 0) +
+  ylab("cell type diversity stastic") +
+  scale_fill_manual(values = c("blue2", "green","red", "maroon")) +
+  ggstyle(scale = 1.5) + 
+  theme(axis.title.x=element_blank(),
+        axis.title = element_text(face = "bold"),
+        legend.position = "none") +
+  ggsignif::geom_signif(
+    y_position = c(0.0), xmin = c(0.5), xmax = c(4.5),
+    annotation = c("***"), tip_length = 0
+  )
+
+plot.ctds
+
+```
+Figure 2C
+```{r}
+#predicted cell type probabilties
+predicted.prob <- read_csv(paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/avg_predicted.probabilities.csv"))
+
+colors <- c("cadetblue2",
+            "cornflowerblue",
+            "blue2",
+            "aquamarine3",
+            "turquoise4",
+            "seagreen",
+            "mediumpurple2",
+            "purple2",
+            "darkorchid4",
+            "pink2",
+            "red3",
+            "sienna2",
+            "yellow2")
+
+predicted.prob$cell.type <- factor(predicted.prob$cell.type, levels=c("CD4 T Naive","CD4 T Memory","CD4 T Cytotoxic","CD8 T Cytotoxic","T Gamma Delta", "Natural Killer","B Naive","B Memory","Plasma", "CD14 Mono","CD16 Mono","Myeloid DC","Plasmacytoid DC"))
+levels(predicted.prob$cell.type) <- c("nCD4TC", "mCD4TC", "cCD4TC","cCD8TC","gdTC", "NK","nBC", "mBC", "pBC","M14", "M16", "mDC", "pDC")
+
+predicted.prob$age.group <- factor(predicted.prob$age.group, levels=c("Younger", "Middle", "Older", "EL"))
+
+
+plot.barplot <- ggplot(data=predicted.prob, aes(x = age.group, y = avg_proportion, fill = cell.type, label = avg_percent)) +
+        geom_bar(color = "black", stat="identity", position = "stack") + facet_wrap(~sex) +
+  geom_text(aes(label=paste0(sprintf("%1.1f", avg_percent),"%")), position=position_stack(vjust=0.5), colour="black", size = 8) +
+  scale_fill_manual(values = colors ) +
+  theme_classic(base_size = 40) + 
+  xlab("age group") +
+  ylab("estimated proportions") +
+  ggstyle(scale = 1.5) +
+  theme(axis.line=element_line(), 
+        #legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"),
+        strip.text.x = element_text(face = "bold"),
+        legend.position = "left",
+        axis.title.x = element_blank())
+
+plot.barplot
+
+```
+Figure 2D
+```{r}
+
+#Heatmap of age comparisons
+
+b1.effects <- read_csv(paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/b1.effects.csv"))
+
+ct_order <- c("CD4 T Cytotoxic",  "T gamma delta",  "M14", "CD4 T Naive", "CD4 T Memory", "Plasma", "mDC", "pDC", "BC Naive", "BC Memory", "M16","CD8 T", "NK" )
+
+b1.mat <- b1.effects %>% 
+  select(cell.type, age.group, Mean) %>% 
+  spread(key = age.group, value = Mean) %>% 
+  relocate(EL.v.Younger, .after = Older.v.Younger) %>%
+   arrange(factor(cell.type, levels = ct_order)) 
+
+b1.mat$cell.type <- c("cCD4TC", "gdTC", "M14", "nCD4TC", "mCD4TC", "pBC", "mDC", "pDC", "nBC", "mBC", "M16", "cCD8TC", "NK")
+
+library(circlize)
+col_fun <- colorRamp2(c(-2, 0, 2), c("blue", "white", "red"))
+row_col <- c("cadetblue2",
+            "cornflowerblue",
+            "darkorchid4",
+            "sienna2",
+            "yellow2",
+            "blue2",
+             "pink2",
+            "turquoise4",
+            "mediumpurple2",
+            "purple2",
+            "red3",
+            "aquamarine3",
+            "seagreen"
+            )
+names(row_col) <- b1.mat$cell.type
+
+library(ComplexHeatmap)
+
+column_ha <- HeatmapAnnotation(comparison = c("Middle.v.Younger", "Older.v.Younger", "EL.v.Younger"), col = list(comparison = c("Middle.v.Younger"= "grey","Older.v.Younger"="grey", "EL.v.Younger"="grey")), show_legend = c(F))
+row_ha <- rowAnnotation(cell.type = b1.mat$cell.type , col = list(cell.type = row_col), show_legend = c(F))
+
+b1.mat <- b1.mat %>% column_to_rownames(var = "cell.type") %>% as.matrix()
+
+b1.heatmap <- ComplexHeatmap::Heatmap(b1.mat, col = col_fun, name = "age coef", cluster_rows = F, cluster_columns = F, top_annotation = column_ha, left_annotation = row_ha, show_column_names = T, column_names_side = "top", column_names_rot = T, column_names_gp = gpar(fontsize = 27),show_row_names = T, row_names_side = "left", row_names_gp = grid::gpar(fontsize = 27), heatmap_legend_param = list(direction = "horizontal", grid_height = unit(8, "mm"), grid_width = unit(8, "mm"), labels_gp = gpar(fontsize = 18) ))
+
+b1.heatmap
+
+#Heatmap of sex comparisons
+
+b2.effects <- read_csv(paste0(work.dir,"Composition_Multinomial/RJAGS_Composition_Analysis/b2.effects.csv"))
+
+
+b2.mat <- b2.effects %>% 
+  select(cell.type, sex, Mean) %>% 
+  spread(key = sex, value = Mean) %>% 
+  #relocate(EL.v.Younger, .after = Older.v.Younger) %>%
+   arrange(factor(cell.type, levels = ct_order)) 
+
+b2.mat$cell.type <- c( "cCD4TC", "gdTC", "M14", "nCD4TC", "mCD4TC", "pBC", "mDC", "pDC", "nBC", "mBC", "M16", "cCD8TC", "NK")
+
+
+library(circlize)
+col_fun <- colorRamp2(c(-2, 0, 2), c("blue", "white", "red"))
+row_col <- c("cadetblue2",
+            "cornflowerblue",
+            "darkorchid4",
+            "sienna2",
+            "yellow2",
+            "blue2",
+             "pink2",
+            "turquoise4",
+            "mediumpurple2",
+            "purple2",
+            "red3",
+            "aquamarine3",
+            "seagreen"
+            )
+names(row_col) <- b2.mat$cell.type
+library(ComplexHeatmap)
+
+column_ha <- HeatmapAnnotation(comparison = c("Female.v.Male"), col = list(comparison = c("Female.v.Male"= "grey")), show_legend = c(F))
+row_ha <- rowAnnotation(cell.type = b2.mat$cell.type, col = list(cell.type = row_col), show_legend = c(F))
+
+b2.mat <- b2.mat %>% column_to_rownames(var = "cell.type") %>% as.matrix()
+
+
+b2.heatmap <- ComplexHeatmap::Heatmap(b2.mat, col = col_fun, name = "sex coef", cluster_rows = F, cluster_columns = F, top_annotation = column_ha, left_annotation = row_ha, show_column_names = T, column_names_side = "top", column_names_rot = T, column_names_gp = gpar(fontsize = 27), column_title = NULL, row_title = NULL, show_row_names = F, row_names_gp = grid::gpar(fontsize = 27), heatmap_legend_param = list(direction = "horizontal", grid_height = unit(8, "mm"), grid_width = unit(8, "mm"), labels_gp = gpar(fontsize = 18) ))
+
+b2.heatmap
+
+#final heatmap
+library(gridExtra)
+heatmap.effects = grid.grabExpr(draw(b1.heatmap + b2.heatmap, heatmap_legend_side = "bottom", legend_title_gp = gpar(fontsize = 27, fontface = "bold")))
+heatmap.effects
+is.grob(heatmap.effects)
+```
+
+```{r}
+
+layout <- "
+AAAABB
+CCCCDD
+"
+
+fig2.plot.R1 <- norm.plot + plot.ctds
+fig2.plot.R2 <- plot.barplot + heatmap.effects + plot_layout(nrow = 1, heights = unit(c(5, 1), c('cm', 'null')))
+fig2.plot <- (norm.plot/plot.barplot) - (plot.ctds/heatmap.effects) + plot_annotation(tag_levels = "A")
+
+ggplot2::ggsave(
+    filename="Figure2.pdf",
+    plot=p3,
+    path="./ScCentenarian_Figures",
+    scale=1,
+    width=33,
+    height=24,
+    units="in",
+    dpi=300
+)
+```
+
