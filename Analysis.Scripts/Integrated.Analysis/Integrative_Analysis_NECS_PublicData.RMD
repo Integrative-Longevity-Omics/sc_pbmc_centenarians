@@ -1,0 +1,165 @@
+---
+title: "Harmonization of NECS and publicly available datasets of aging and longevity"
+author: "Tanya Karagiannis"
+output: html_document
+---
+
+
+Purpose: 
+Integration of single cell datasets
+
+Load libraries
+```{r}
+library(dplyr)
+library(Seurat)
+library(useful)
+library(cowplot)
+
+library(harmony, lib.loc = "/restricted/projectnb/montilab-p/R_pkgs/CentOS7/R_4.0.0/")
+#library(devtools)
+#withr::with_libpaths("/restricted/projectnb/montilab-p/R_pkgs/CentOS7/R_3.6.0",install_github("immunogenomics/harmony"))
+
+work.dir <- "/restricted/projectnb/uh2-sebas/analysis/scCentenarians/"
+
+pbmc.combined <- merge(readRDS(file = paste0(work.dir,"PublicData_Reanalysis/Data/pbmc_public.rds")), readRDS(paste0(work.dir,"NECS_Analysis/Data/pbmc.necs.rds")), project = "PBMC.3data")
+
+Idents(pbmc.combined) <- "ct.consensus"
+pbmc.combined <- subset(pbmc.combined, idents = c("MKI", "MGK", "EC"), invert = T)
+pbmc.combined$ct.consensus <- droplevels(pbmc.combined$ct.consensus)
+```
+
+Merge datasets in one seurat object and run PCA 
+```{r}
+pbmc.combined <- pbmc.combined %>%
+    Seurat::NormalizeData(verbose = FALSE) %>%
+    FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>% 
+    ScaleData(verbose = FALSE) %>% 
+    RunPCA(pc.genes = pbmc.combined@var.genes, npcs = 20, verbose = FALSE)
+
+head(pbmc.combined@meta.data)
+
+
+#Visualize PCA
+p1 <- DimPlot(object = pbmc.combined, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = pbmc.combined, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+
+```
+
+Function to calculate average silhoutte score
+```{r}
+batch_sil <- function(pca.data, batch, nPCs = 20){
+  require(cluster)
+    # in scone, they use svd to compute principal components.
+    # For now, we'll keep the PCA object created in
+    # prcomp to be consistent
+    # proj <- svd(scale(t(expr),center = TRUE,scale = TRUE),
+    #             nu = 3, nv =0)$u
+
+    dd <- as.matrix(dist(pca.data[, seq_len(nPCs)]))
+    summary(silhouette(as.numeric(batch), dd))$avg.width
+}
+```
+
+Calculate average silhoutte score for each cell type population before batch correction with Harmony
+```{r}
+#local silhouette score
+cell.types <- levels(as.factor(pbmc.combined$ct.consensus))
+table(pbmc.combined$ct.consensus, pbmc.combined$batch)
+cell.types <- cell.types[-which(cell.types %in% c("T gamma delta","CD4 T Cytotoxic", "Plasma"))]
+#pca.data <- pbmc.combined@reductions$pca@cell.embeddings
+
+pca.sil.score <- lapply(1:length(cell.types), function(x){
+  ct.order <- which(pbmc.combined@meta.data$ct.consensus == cell.types[x])
+  ct.cells <- rownames(pbmc.combined@meta.data)[ct.order]
+  pca.data <- pbmc.combined@reductions$pca@cell.embeddings[ct.cells,]
+  batch <- as.factor(pbmc.combined@meta.data$batch[ct.order])
+
+  pca.sil <- batch_sil(pca.data, batch, nPCs = 20)
+  return(pca.sil)
+})
+pca.sil.score <- unlist(pca.sil.score)
+names(pca.sil.score) <- cell.types
+
+#local silhouette score
+cell.types <- levels(as.factor(pbmc.combined$ct.consensus))
+table(pbmc.combined$ct.consensus, pbmc.combined$batch)
+cell.types <- cell.types[-which(cell.types %in% c("T gamma delta","CD4 T Cytotoxic", "Plasma"))]
+#pca.data <- pbmc.combined@reductions$pca@cell.embeddings
+
+```
+
+Run Harmony to correct for batch differences in PCA space
+```{r}
+pbmc.combined <- pbmc.combined %>% 
+    RunHarmony("batch", plot_convergence = TRUE)
+
+saveRDS(pbmc.combined, file = paste0(work.dir, "Integrated_Data/pbmc.combined.rds"))
+
+p1 <- DimPlot(object = pbmc.combined, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = pbmc.combined, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+
+```
+
+
+Average silhoutte score for each cell type after batch correction
+```{r}
+#local average silhoutte score
+harmony.sil.score <- lapply(1:length(cell.types), function(x){
+  ct.order <- which(pbmc.combined@meta.data$ct.consensus == cell.types[x])
+  ct.cells <- rownames(pbmc.combined@meta.data)[ct.order]
+  harmony.data <- pbmc.combined@reductions$harmony@cell.embeddings[ct.cells,]
+  batch <- as.factor(pbmc.combined@meta.data$batch[ct.order])
+  harmony.sil <- batch_sil(harmony.data, batch, nPCs = 20)
+  return(harmony.sil)
+})
+harmony.sil.score <- unlist(harmony.sil.score)
+names(harmony.sil.score) <- cell.types
+sil.score <- cbind.data.frame("pre-correction" = pca.sil.score, "post-correction" = harmony.sil.score)
+
+sil.score <- reshape2::melt(sil.score)
+ggplot2::ggplot(sil.score, aes(
+  x = variable, y = value,
+  fill = variable), color = "black") +
+  ggplot2::geom_boxplot() +
+  ylab("silhoutte score") + xlab("batch")+
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#significance between silhoutte scores pre and post batch correction
+t.test(value ~ variable, data = sil.score)
+write.csv(sil.score, paste0(work.dir, "/Integrated_Data/sil.score.csv"))
+```
+
+Run UMAP based on top 20 Harmony corrected PCs
+```{r}
+pbmc.combined <- pbmc.combined %>% 
+    RunUMAP(reduction = "harmony", dims = 1:20) %>%
+    FindNeighbors(reduction = "harmony", dims = 1:20) %>% 
+    FindClusters(resolution = 0.8) %>% 
+    identity()
+
+p1 <- DimPlot(object = pbmc.combined, reduction = "umap", pt.size = .1, group.by = "ct.consensus", label = F)
+
+```
+
+Feature average expression across separately identified subpopulations
+```{r}
+
+Idents(pbmc.combined) <- "ct.consensus"
+pbmc.combined$ct.consensus <- factor(pbmc.combined$ct.consensus, levels = rev(levels(pbmc.combined$ct.consensus)))
+DotPlot(pbmc.combined, group.by = "ct.consensus", features = c("CD3D", "CD3G", "TRAC", #tcells
+                               "CD8A","CD8B","TRDC",#cd8 and tdeltagamma
+                               "GNLY", "NKG7", #nk cells
+                               "CCR7","LEF1","TCF7","CREM", #noncytotoxic
+                               "GZMH", "GZMB", "GZMA", "PRF1", #cytotoxic
+                              "CD19", "CD79A", "MS4A1", #bcells
+                              "IGJ", "MZB1", #plasma cells 
+                              "CD14","FCGR3A","S100A8", "S100A12", #monocytes
+                              "LILRA4","TSPAN13", "GPR183", "IL3RA") #DC
+                              
+) + RotatedAxis()
+```
+
+
