@@ -1,0 +1,350 @@
+---
+title: "Bulk DE analysis of single cell data at the sample level using DESeq2"
+author: "Tanya Karagiannis, Stefano Monti, Paola Sebastiani"
+output:
+  html_document:
+    theme: united
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_collapse: false
+---
+
+# Load libraries and data
+```{r}
+suppressMessages(c(
+library(dplyr),
+library(reshape2),
+library(Seurat),
+library(Matrix),
+library(ggplot2),
+library(cowplot),
+library(knitr),
+library(SingleCellExperiment),
+library(Matrix.utils),
+library(DESeq2),
+library(tibble)
+))
+
+work.dir <- "/restricted/projectnb/uh2-sebas/analysis/scCentenarians/"
+
+pbmc.combined <- merge(readRDS(file = paste0(work.dir,"PublicData_Reanalysis/Data/pbmc_public.rds")), readRDS(paste0(work.dir,"NECS_Analysis/Data/pbmc.necs.rds")), project = "PBMC.3data")
+```
+
+# Filter dataset:
+- keep immune cell type only
+
+```{r}
+#keep only immune cells
+Idents(pbmc.combined) <- "ct.consensus"
+pbmc.combined <- subset(pbmc.combined, idents = c("EC","MKI","MGK","Plasma", "CD4 T Cytotoxic", "T gamma delta","pDC"), invert = TRUE)
+pbmc.combined$ct.consensus <- factor(pbmc.combined$ct.consensus, levels = c("CD4 T Naive", "CD4 T Memory", "NK", "M14", "BC Memory","BC Naive","CD8 T","M16", "mDC"))
+cell.types <- levels(pbmc.combined$ct.consensus)
+print(cell.types)
+
+#filtering genes to include genes expressed in over 50% of cells of the least frequent cell type
+min.count <- sum(pbmc.combined@meta.data$ct.consensus == "mDC")/2
+
+# Output a logical vector for every gene on whether the more than zero counts per cell
+nonzero <- pbmc.combined[['RNA']]@counts > 0
+
+# Sums all TRUE values and returns TRUE if more than min.count TRUE values per gene
+keep_genes <- Matrix::rowSums(nonzero) >= min.count
+length(keep_genes)
+
+#filter genes based on threshold
+pbmc.combined[["RNA"]]@data <- pbmc.combined[["RNA"]]@data[keep_genes,]
+dim(pbmc.combined)
+
+```
+
+# Set up data into a SingleCellExperiment
+
+```{r}
+# Extract raw counts and metadata to create SingleCellExperiment object
+counts <- pbmc.combined@assays$RNA@counts 
+
+metadata <- pbmc.combined@meta.data
+
+# Create single cell experiment object
+necs.sce <- SingleCellExperiment(assays = list(counts = counts), 
+                           colData = metadata)
+
+#factor sample.ID
+colData(necs.sce)[,c("sample.ID")] <- factor(colData(necs.sce)[,c("sample.ID")])
+
+```
+
+# Generate sample level metadata
+
+```{r}
+
+# Named vector of sample names
+sids <- levels(necs.sce$sample.ID)
+
+## Determine the number of cells per sample
+table(necs.sce$sample.ID)
+
+## Turn named vector into a numeric vector of number of cells per sample
+n_cells <- as.numeric(table(necs.sce$sample.ID))
+
+## Create the sample level metadata by combining the reordered metadata with the number of cells corresponding to each sample.
+sample_metadata <- data.frame(sids, n_cells, row.names = NULL) 
+
+#Add age information to data
+#Set based on age groups: 4 control quartiles, and centenarians
+Age <- unlist(sapply(1:nrow(sample_metadata), function(x){unique(pbmc.combined@meta.data$age.quartiles[pbmc.combined@meta.data$sample.ID %in% sample_metadata$sid[x]])}))
+
+sample_metadata$age <- Age
+sample_metadata$age <- factor(sample_metadata$age, levels = c("20-39","40-59","60-89", "Extreme Longevity"))
+levels(sample_metadata$age) <- c("Younger","Middle","Older","EL")
+
+#Add sex information
+Sex <- unlist(sapply(1:nrow(sample_metadata), function(x){unique(pbmc.combined@meta.data$sex[pbmc.combined@meta.data$sample.ID %in% sample_metadata$sid[x]])}))
+
+sample_metadata$sex <- Sex
+sample_metadata$sex <- factor(sample_metadata$sex, levels = c("Female","Male"))
+
+#Add batch information
+Batch <- unlist(sapply(1:nrow(sample_metadata), function(x){unique(pbmc.combined@meta.data$batch[pbmc.combined@meta.data$sample.ID %in% sample_metadata$sid[x]])}))
+
+sample_metadata$batch <- Batch
+sample_metadata$batch <- factor(sample_metadata$batch, levels = c("NATGEN","COHORT.B1","COHORT.B2", "PNAS"))
+
+#Add ethnicity information
+Ethnicity <- unlist(sapply(1:nrow(sample_metadata), function(x){unique(pbmc.combined@meta.data$batch[pbmc.combined@meta.data$sample.ID %in% sample_metadata$sid[x]])}))
+
+sample_metadata$ethnic <- Ethnicity
+sample_metadata$ethnic[sample_metadata$ethnic == "NATGEN"] <- "European"
+sample_metadata$ethnic[sample_metadata$ethnic == "COHORT.B1"] <- "European"
+sample_metadata$ethnic[sample_metadata$ethnic == "COHORT.B2"] <- "European"
+sample_metadata$ethnic[sample_metadata$ethnic == "PNAS"] <- "Japanese"
+sample_metadata$ethnic <- factor(sample_metadata$ethnic, levels = c("European", "Japanese"))
+#print sample metdata table
+sample_metadata
+```
+
+
+```{r}
+# Aggregate the counts per sample_id and cluster_id
+
+# Identify groups for aggregation of counts
+sample.groups <- colData(necs.sce)[, c("sample.ID")]
+
+# Aggregate across cluster-sample groups
+pb <- Matrix.utils::aggregate.Matrix(t(counts(necs.sce)), 
+                       groupings = sample.groups, fun = "sum") 
+
+class(pb)
+
+dim(pb)
+
+pb[1:6, 1:6]
+```
+
+# Create DEseq object
+
+```{r}
+dds <- DESeq2::DESeqDataSetFromMatrix(data.frame(t(pb)), 
+                              colData = sample_metadata, 
+                              design = ~ age + sex + batch)
+
+```
+
+# Run DESEQ at the sample level
+```{r}
+dds <- DESeq(dds)
+#saveRDS(dds, file = paste0(work.dir,"Differential_Analysis/Bulk_Analysis/DEseq.output.rds"))
+```
+
+# Check fit of model by looking at plot of dispersion estimates
+```{r}
+# Plot dispersion estimates
+plotDispEsts(dds)
+
+```
+
+# Middle Age v. Younger Age
+- fdr < 0.05
+- summary of results
+```{r}
+# Output results of Wald test for contrast for Middle v. Younger Age
+levels(sample_metadata$age)[2]
+levels(sample_metadata$age)[1]
+
+contrast <- c("age", levels(sample_metadata$age)[2], levels(sample_metadata$age)[1])
+
+# resultsNames(dds)
+res <- results(dds, 
+               contrast = contrast,
+               alpha = 0.05)
+
+write.csv(res %>%
+        data.frame() %>%
+        tibble::rownames_to_column(var="gene") ,
+          paste0(work.dir, "Differential_Analysis/Bulk_Analysis/Middle.v.Younger_all_genes.csv"),
+          quote = FALSE,
+          row.names = FALSE)
+
+#summary of results
+summary(res)
+
+#number of significant genes based on fdr < 0.05
+sum(res$padj < 0.05, na.rm=TRUE)
+```
+
+Table of significant genes
+```{r}
+# Turn the results object into a tibble for use with tidyverse functions
+sig.MY <- res %>%
+        data.frame() %>%
+        tibble::rownames_to_column(var="gene") %>%
+        dplyr::filter(padj < 0.05 & abs(log2FoldChange) > log2(1.5)) %>%
+        dplyr::arrange(padj) %>%
+        as_tibble()
+
+# Check results output
+sig.MY
+
+# Write all results to file
+write.csv(sig.MY,
+          paste0(work.dir, "Differential_Analysis/Bulk_Analysis/Middle.v.Younger_sig_genes.csv"),
+          quote = FALSE,
+          row.names = FALSE)
+```
+
+# Older Age v. Younger Age
+- fdr < 0.05
+- summary of results
+```{r}
+# Output results of Wald test for contrast for Older v. Younger Age
+levels(sample_metadata$age)[3]
+levels(sample_metadata$age)[1]
+
+contrast <- c("age", levels(sample_metadata$age)[3], levels(sample_metadata$age)[1])
+
+# resultsNames(dds)
+res <- results(dds, 
+               contrast = contrast,
+               alpha = 0.05)
+
+write.csv(res %>%
+        data.frame() %>%
+        tibble::rownames_to_column(var="gene") ,
+          paste0(work.dir, "Differential_Analysis/Bulk_Analysis/Older.v.Younger_all_genes.csv"),
+          quote = FALSE,
+          row.names = FALSE)
+
+#summary of results
+summary(res)
+
+#number of significant genes based on fdr < 0.05
+sum(res$padj < 0.05, na.rm=TRUE)
+```
+
+Table of significant genes
+```{r}
+# Turn the results object into a tibble for use with tidyverse functions
+sig.OY <- res %>%
+        data.frame() %>%
+        tibble::rownames_to_column(var="gene") %>%
+        dplyr::filter(padj < 0.05 & abs(log2FoldChange) > log2(1.5)) %>%
+        dplyr::arrange(padj) %>%
+        as_tibble()
+
+# Check results output
+sig.OY
+
+# Write all results to file
+write.csv(sig.OY,
+          paste0(work.dir, "Differential_Analysis/Bulk_Analysis/Older.v.Younger_sig_genes.csv"),
+          quote = FALSE,
+          row.names = FALSE)
+
+```
+
+# EL v. Younger Age
+- fdr < 0.05
+- summary of results
+```{r}
+# Output results of Wald test for contrast for EL v. Younger Age
+levels(sample_metadata$age)[4]
+levels(sample_metadata$age)[1]
+
+contrast <- c("age", levels(sample_metadata$age)[4], levels(sample_metadata$age)[1])
+
+# resultsNames(dds)
+res <- results(dds, 
+               contrast = contrast,
+               alpha = 0.05)
+
+write.csv(res %>%
+        data.frame() %>%
+        tibble::rownames_to_column(var="gene") ,
+          paste0(work.dir, "Differential_Analysis/Bulk_Analysis/EL.v.Younger_all_genes.csv"),
+          quote = FALSE,
+          row.names = FALSE)
+
+#summary of results
+summary(res)
+
+#number of significant genes based on fdr < 0.05
+sum(res$padj < 0.05, na.rm=TRUE)
+```
+
+Table of significant genes
+```{r}
+# Turn the results object into a tibble for use with tidyverse functions
+sig.EL <- res %>%
+        data.frame() %>%
+        tibble::rownames_to_column(var="gene") %>%
+        dplyr::filter(padj < 0.05 & abs(log2FoldChange) > log2(1.5)) %>%
+        dplyr::arrange(padj) %>%
+        as_tibble()
+
+# Check results output
+sig.EL
+
+# Write all results to file
+write.csv(sig.EL,
+          paste0(work.dir, "Differential_Analysis/Bulk_Analysis/EL.v.Younger_sig_genes.csv"),
+          quote = FALSE,
+          row.names = FALSE)
+
+```
+
+# Heatmap of scaled fold change of significant genes across the human lifespan
+```{r}
+MY_res <- read.csv(paste0(work.dir,"Differential_Analysis/Bulk_Analysis/Middle.v.Younger_all_genes.csv"), header = T)
+OY_res <- read.csv(paste0(work.dir, "Differential_Analysis/Bulk_Analysis/Older.v.Younger_all_genes.csv"), header = T)
+EL_res <- read.csv(paste0(work.dir,"Differential_Analysis/Bulk_Analysis/EL.v.Younger_all_genes.csv"), header = T)
+
+
+DE.sig.genes <- unique(c(sig.MY$gene, sig.OY$gene, sig.EL$gene))
+
+MY_sig_res <- MY_res[MY_res$gene %in% DE.sig.genes,] %>% select(gene, log2FoldChange) 
+OY_sig_res <- OY_res[OY_res$gene %in% DE.sig.genes,] %>% select(gene, log2FoldChange) 
+EL_sig_res <- EL_res[EL_res$gene %in% DE.sig.genes,] %>% select(gene, log2FoldChange) 
+
+bulk_sig_res <- cbind.data.frame(MY_FC = MY_sig_res[,2], OY_FC = OY_sig_res[,2], EL_FC = EL_sig_res[,2])
+
+require(circlize)
+require(ComplexHeatmap)
+bulk_sig_res <- scale(t(2^bulk_sig_res))
+
+ha <- HeatmapAnnotation(comparison = c("Middle.v.Younger", "Older.v.Younger", "EL.v.Younger"), col = list(comparison = c("Middle.v.Younger" = "lightgreen", "Older.v.Younger" = "darkgreen", "EL.v.Younger" = "orchid")
+))
+
+DE.bulk.heatmap <- ComplexHeatmap::Heatmap(as.matrix(t(bulk_sig_res)), cluster_rows = T, cluster_columns = F, name = "scaled FC", show_row_names = F, show_column_names = F, row_names_gp = gpar(fontsize = 12), top_annotation = ha)
+
+ggplot2::ggsave(
+    filename="Supplementary_Bulk.DE.Heatmap.pdf",
+    plot=draw(DE.bulk.heatmap),
+    path=paste0(work.dir,"/Figures"),
+    scale=1,
+    width = 5,
+    height=5,
+    units="in",
+    dpi=300
+)
+```

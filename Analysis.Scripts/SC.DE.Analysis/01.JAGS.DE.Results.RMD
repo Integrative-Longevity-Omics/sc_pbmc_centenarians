@@ -1,0 +1,1001 @@
+---
+title: "Differential Analysis of cell type specific EL and Aging signatures"
+author: "Tanya Karagiannis, Stefano Monti, Paola Sebastiani"
+output:
+  html_document:
+    theme: united
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_collapse: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo = F}
+## Functions to run to make nice figures!
+
+#ink colors from anfed/risoink
+
+#' Raw riso ink colors
+#' 
+#' @keywords internal
+.riso_colors <- function() {
+  c(
+    "black"="#000000",
+    "burgundy"="#914E72",
+    "blue"="#0078BF",
+    "green"="#00A95C",
+    "medium-blue"="#3255A4",
+    "bright-red"="#F15060",
+    "risofederal-blue"="#3D5588",
+    "purple"="#765BA7",
+    "teal"="#00838A",
+    "flat-gold"="#BB8B41",
+    "hunter-green"="#407060",
+    "red"="#FF665E",
+    "brown"="#925F52",
+    "yellow"="#FFE800",
+    "marine-red"="#D2515E",
+    "orange"="#FF6C2F",
+    "fluorescent-pink"="#FF48B0",
+    "light-gray"="#88898A",
+    "metallic-gold"="#AC936E",
+    "crimson"="#E45D50",
+    "fluorescent-orange"="#FF7477",
+    "cornflower"="#62A8E5",
+    "sky-blue"="#4982CF",
+    "sea-blue"="#0074A2",
+    "lake"="#235BA8",
+    "indigo"="#484D7A",
+    "midnight"="#435060",
+    "mist"="#D5E4C0",
+    "granite"="#A5AAA8",
+    "charcoal"="#70747C",
+    "smoky-teal"="#5F8289",
+    "steel"="#375E77",
+    "slate"="#5E695E",
+    "turquoise"="#00AA93",
+    "emerald"="#19975D",
+    "grass"="#397E58",
+    "forest"="#516E5A",
+    "spruce"="#4A635D",
+    "moss"="#68724D",
+    "sea-foam"="#62C2B1",
+    "kelly-green"="#67B346",
+    "light-teal"="#009DA5",
+    "ivy"="#169B62",
+    "pine"="#237E74",
+    "lagoon"="#2F6165",
+    "violet"="#9D7AD2",
+    "orchid"="#AA60BF",
+    "plum"="#845991",
+    "raisin"="#775D7A",
+    "grape"="#6C5D80",
+    "scarlet"="#F65058",
+    "tomato"="#D2515E",
+    "cranberry"="#D1517A",
+    "maroon"="#9E4C6E",
+    "raspberry-red"="#D1517A",
+    "brick"="#A75154",
+    "light-lime"="#E3ED55",
+    "sunflower"="#FFB511",
+    "melon"="#FFAE3B",
+    "apricot"="#F6A04D",
+    "paprika"="#EE7F4B",
+    "pumpkin"="#FF6F4C",
+    "bright-olive-green"="#B49F29",
+    "bright-gold"="#BA8032",
+    "copper"="#BD6439",
+    "mahogany"="#8E595A",
+    "bisque"="#F2CDCF",
+    "bubble-gum"="#F984CA",
+    "light-mauve"="#E6B5C9",
+    "dark-mauve"="#BD8CA6",
+    "wine"="#914E72",
+    "gray"="#928D88",
+    "white"="#FFFFFF",
+    "aqua"="#5EC8E5",
+    "mint"="#82D8D5",
+    "fluorescent-yellow"="#FFE900",
+    "fluorescent-red"="#FF4C65",
+    "fluorescent-green"="#44D62C"
+  )
+}
+
+#' Adjust transparency of a hex string
+#'
+#' @param hex A 6-character hex string (e.g. #000000)
+#' @param percent Transparency level from 0-1
+#' @return A hex string
+#' 
+#' @export
+hex_transparacy <- function(hex, percent=1) {
+  if (percent < 0) percent <- 0
+  if (percent > 1) percent <- 1
+  percent <- toupper(as.hexmode(floor(percent * 255)))
+  percent <- sprintf("%02s", percent)
+  hex <- paste0(hex, percent)
+  return(hex)
+}
+
+#' Riso color names
+#'
+#' @param sorted Optionally sort values
+#' @return A character vector of names
+#' 
+#' @export
+riso_names <- function(sorted=FALSE) {
+  if (sorted) {
+    return(sort(names(.riso_colors())))   
+  } else {
+    return(names(.riso_colors()))
+  }
+}
+
+#' Get a risk ink color
+#'
+#' @param color Color name
+#' @param alpha Color transparency
+#' @return A hex string
+#' 
+#' @export
+riso_color <- function(color, alpha=1) {
+  riso_colors <- .riso_colors()
+  if (color %in% names(riso_colors)) {
+    hex <- riso_colors[[color]]
+    if (alpha >= 1) {
+      return(hex)
+    } else {
+      return(hex_transparacy(hex, alpha))
+    }
+  } else {
+    cat("Riso Ink Colors: \n")
+    print(riso_names(sorted=TRUE))
+    stop("Invalid color")
+  }
+}
+
+#' Plot one or more colors
+#'
+#' @param colors Character vector of hex strings
+#' @param title Optional plot title
+#' @return A `gg` object
+#' 
+#' @import ggplot2
+#' @import ggforce 
+#' 
+#' @export
+show_colors <- function(colors, title="") {
+  df <- data.frame(hex=colors, y=1, x=seq(length(colors)))
+  fill_values <- colors
+  names(fill_values) <- colors
+  ggplot(df, aes(x0=x, y0=y, r=0.4, fill=hex, expand=1)) + 
+    geom_circle() + 
+    scale_fill_manual(values=fill_values) +
+    coord_equal() + 
+    theme_void() +
+    labs(title=paste0("  ", title, "\n")) + 
+    xlim(0, max(7, nrow(df))+1) +
+    theme(legend.position="none")
+}
+
+
+#Plot using ggstyle to easily change specific aspects
+#from montilab/best-practices
+#function to modify ggplot parameters from montilab/best-practices
+ggstyle <- function(font="Helvetica", scale=1) {
+  fs <- function(x) x*scale # Dynamic font scaling
+  ggplot2::theme(
+    plot.title = ggplot2::element_text(family=font, size=fs(26), face="bold", color="#222222"),
+    plot.subtitle = ggplot2::element_text(family=font, size=fs(18), margin=ggplot2::margin(0,0,5,0)),
+    plot.caption = ggplot2::element_blank(),
+    legend.position = "right",
+    legend.text.align = 0,
+    legend.background = ggplot2::element_blank(),
+    legend.title = ggplot2::element_blank(),
+    legend.key = ggplot2::element_blank(),
+    legend.text = ggplot2::element_text(family=font, size=fs(18), color="#222222"),
+    axis.title =  ggplot2::element_text(family=font, size=fs(18), color="#222222"),
+    axis.text = ggplot2::element_text(family=font, size=fs(18), color="#222222"),
+    axis.text.x = ggplot2::element_text(margin=ggplot2::margin(5, b=10)),
+    #axis.ticks = ggplot2::element_blank(),
+    axis.line = ggplot2::element_line(color="#222222"),
+    panel.grid.minor = ggplot2::element_blank(),
+    panel.grid.major.y = ggplot2::element_blank(),
+    panel.grid.major.x = ggplot2::element_blank(),
+    panel.background = ggplot2::element_blank(),
+    strip.background = ggplot2::element_rect(fill="white"),
+    strip.text = ggplot2::element_text(size=fs(22), hjust=0)
+  )
+}
+
+```
+
+## Load libraries and set work directory
+```{r, warning = F, message=F}
+library(tidyverse)
+library(ggplot2)
+#library(ggVennDiagram)
+#library(ggvenn)
+library(stringr)
+library(readxl)
+library(xlsx)
+library(gridExtra)
+library(dplyr)
+library(Seurat)
+
+work.dir <- "/restricted/projectnb/uh2-sebas/analysis/scCentenarians/"
+
+cell.types <- c("CD4 T Naive", "CD4 T Memory","CD8 T","NK","BC Naive","BC Memory","M14","M16","mDC")
+
+pbmc.combined <- readRDS(file = paste0(work.dir,"Integrated_Data/pbmc.combined.rds"))
+
+```
+
+## Differential genes of aging and EL
+### Load rjags results 
+```{r}
+rjags.res <- lapply(1:length(cell.types), function(i){
+  doc.name <- str_replace_all(cell.types[i], fixed(" "), "_")
+  DE.lifespan <- readRDS(paste0(work.dir,"Differential_Analysis/JAGS_Output/JAGS.Lifespan/JAGS.Summary/",doc.name,".rds"))
+  return(DE.lifespan)
+})
+names(rjags.res) <- cell.types
+```
+
+### Select genes with fdr <= 0.05 and min 10% change and save to csv file
+```{r}
+#cell type specific significant genes with log fold change, p-value, and fdr 
+DE.sig <- rjags.res %>% purrr::map(function(x) as_tibble(x, rownames = "gene")) %>%
+              purrr::map(function(x) select(x, gene, MY_Mean, MY_pval, MY_fdr, OY_Mean, OY_pval, OY_fdr, EL_Mean, EL_pval, EL_fdr)) %>%
+              purrr::map(function(x) filter(x, MY_fdr <= 0.05 | OY_fdr <= 0.05 | EL_fdr <= 0.05)) %>%
+              purrr::map(function(x) filter(x, abs(MY_Mean) > log2(1.1) | abs(OY_Mean) > log2(1.1) | abs(EL_Mean) > log2(1.1))) 
+
+#add cell type names for each dataframe
+DE.sig <- lapply(1:length(DE.sig), function(x){
+  res <- DE.sig[[x]]
+  res$cell.type <- rep(names(rjags.res)[x], nrow(res))
+  return(res)
+  })
+
+#bind dataframes together
+DE.sig.df <- DE.sig %>% bind_rows %>% 
+                        relocate(cell.type, .before = gene) %>%
+                        rename("MY_logFC" = MY_Mean, "OY_logFC" = OY_Mean, "EL_logFC" = EL_Mean)
+
+#save cell type specific significant signatures to csv file
+readr::write_csv(DE.sig.df, paste0(work.dir, "Differential_Analysis/DE.gene.sig.csv"))
+```
+
+
+### Select genes with fdr <= 0.05 and min 10% change and save to csv file
+```{r}
+DE.genes <- lapply(1:length(cell.types), function(i){
+  doc.name <- str_replace_all(cell.types[i], fixed(" "), "_")
+  
+  
+  DE.EL <- readRDS(paste0(work.dir,"Differential_Analysis/JAGS_Output/JAGS.Lifespan/JAGS.Summary/",doc.name,".rds"))
+  
+  #filter significant differential genes for each analysis by fdr significance <= 0.05
+  #DE.EL <-  DE.EL %>% dplyr::filter(MY_fdr <= 0.05 | OY_fdr <= 0.05 | EL_fdr <= 0.05)
+  #DE.EL <-  DE.EL %>% dplyr::filter(abs(MY_Mean) > log2(1.1) | abs(OY_Mean) > log2(1.1) | abs(EL_Mean) > log2(1.1))
+
+  Unique.EL <- DE.EL %>% select(MY_Mean, MY_SD, MY_z, MY_fdr, OY_Mean, OY_SD, OY_z, OY_fdr, EL_Mean, EL_SD, EL_z, EL_fdr)
+   
+   if (nrow(Unique.EL) != 0){
+      Unique.EL <- Unique.EL
+    } else{
+      Unique.EL <- c("no specific genes")
+    }
+  
+  #Significant genes in Middle v. Younger
+  MY.sig <- DE.EL %>% filter(MY_fdr <= 0.05 & abs(MY_Mean) > log2(1.1)) %>% select(MY_Mean, MY_SD, MY_z, MY_fdr)
+  MY.sig.genes <- rownames(MY.sig)
+  
+  if (nrow(MY.sig) != 0){
+      MY.sig <- MY.sig
+    } else{
+      MY.sig <- c("no specific genes")
+    }
+  
+  write.xlsx(MY.sig, file = paste0(work.dir,"Differential_Analysis/MY.DEG.fdr.xlsx"), sheetName = paste0(doc.name), append = T)
+
+  
+  
+  #Significant genes in Older v. Younger
+  OY.sig <- DE.EL %>% filter(OY_fdr <= 0.05 & abs(OY_Mean) > log2(1.1)) %>% select(OY_Mean, OY_SD, OY_z, OY_fdr)
+  OY.sig.genes <- rownames(OY.sig)
+  
+  if (nrow(OY.sig) != 0){
+      OY.sig <- OY.sig
+    } else{
+      OY.sig <- c("no specific genes")
+    }
+  write.xlsx(OY.sig, file = paste0(work.dir,"Differential_Analysis/OY.DEG.fdr.xlsx"), sheetName = paste0(doc.name), append = T)
+  
+  
+  #Significant genes in EL v. Younger
+  EL.sig <- DE.EL %>% filter(EL_fdr <= 0.05 & abs(EL_Mean) > log2(1.1)) %>% select(EL_Mean, EL_SD, EL_z, EL_fdr)
+  EL.sig.genes <- rownames(EL.sig)
+  
+  if (nrow(EL.sig) != 0){
+      EL.sig <- EL.sig
+    } else{
+      EL.sig <- c("no specific genes")
+    }
+  write.xlsx(EL.sig, file = paste0(work.dir,"Differential_Analysis/EL.DEG.fdr.xlsx"), sheetName = paste0(doc.name), append = T)
+  
+  
+
+  #table of number of genes up and down for longevity and aging
+  DE.table <- c("Middle v. Younger" = length(MY.sig.genes), "Older v. Younger" = length(OY.sig.genes), "EL v. Younger" = length(EL.sig.genes))
+  
+  
+  #write.xlsx(Unique.EL, file = paste0(work.dir,"Differential_Analysis/Lifespan.DEG.fdr.xlsx"), sheetName = paste0(doc.name), append = T)
+  
+  #return(DE.table)
+})
+
+DE.genes <- do.call(rbind, DE.genes)
+cell.type.names <- c("CD4 T Naive", "CD4 T Memory", "CD8 T Cytotoxic", "Natural Killer", "B Naive", "B Memory", "CD14 Mono", "CD16 Mono", "Myeloid DC")
+rownames(DE.genes) <- cell.type.names
+#DE.genes <- t(DE.genes)
+
+
+require(gridExtra)
+gridExtra::grid.table(DE.genes)
+```
+
+### Boxplot of each cell type specific DE genes across age
+```{r, fig.dim = c(20,20)}
+DE.sig.genes <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  DE.EL <- readRDS(paste0(work.dir,"Differential_Analysis/JAGS_Output/JAGS.Lifespan/JAGS.Summary/",doc.name,".rds"))
+  DE.EL$gene <- rownames(DE.EL)
+  DE.EL <- DE.EL %>% filter(MY_fdr <= 0.05 | OY_fdr <= 0.05 | EL_fdr <= 0.05) %>% filter(abs(MY_Mean) > log2(1.1) | abs(OY_Mean) > log2(1.1) | abs(EL_Mean) > log2(1.1)) %>% arrange(EL_fdr)
+  
+  return(DE.EL$gene)  
+})
+
+plot.sig.genes <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  Idents(pbmc.combined) <- "ct.consensus"
+  pbmc.set <- subset(pbmc.combined, idents = cell.types[x])
+  pbmc.set <- Seurat::AverageExpression(pbmc.set, features = DE.sig.genes[[x]], group.by = "sample.ID", slot = "data")
+  
+  pbmc.set <- reshape2::melt(pbmc.set$RNA)
+  colnames(pbmc.set)[1:2] <- c("gene", "sample.ID")
+ 
+  Age <- unlist(sapply(1:nrow(pbmc.set), function(x){unique(pbmc.combined@meta.data$age.quartiles[pbmc.combined@meta.data$sample.ID %in% pbmc.set$sample.ID[x]])}))
+
+pbmc.set$age <- Age
+pbmc.set$age <- factor(pbmc.set$age, levels = c("20-39","40-59","60-89", "Extreme Longevity"))
+levels(pbmc.set$age) <- c("Younger", "Middle", "Older", "EL")
+
+plot.sig <- ggplot(pbmc.set, aes(age,value)) + geom_boxplot(aes(col = age)) + geom_point() + facet_wrap(~ gene, scale = "free") + theme_bw(base_size = 30) + ggplot2::scale_color_manual(values = c("blue2", "green","red", "maroon")) + ggtitle(doc.name) + ylab("average expression level")
+
+
+return(plot.sig) 
+  
+})
+
+plot.sig.genes
+
+
+```
+
+### Boxplot of each cell type specific DE genes across age: Figure 4C, 4D, 4E
+```{r, fig.dim = c(20,20)}
+cell.types <- c("CD4 T Naive", "CD4 T Memory", "CD8 T", "BC Naive", "BC Memory", "M16")
+
+DE.sig.genes <- list("CD4 T Naive" = c("STK17A", "LRRN3", "LEF1", "S100A4", "SESN3"),
+                     "CD4 T Memory" = c("HLA.DPA1"),
+                     "CD8 T" = c("HLA.DPB1"),
+                     "BC Naive" = c("NOP53","MAP1LC3B"),
+                     "BC Memory" = c("COX16"),
+                     "M16" = c("CTSH", "ELOB")
+)
+  
+
+
+plot.sig.genes <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  DE.gene <- DE.sig.genes[[x]]
+  Idents(pbmc.combined) <- "ct.consensus"
+  pbmc.set <- subset(pbmc.combined, idents = cell.types[x])
+  pbmc.set <- Seurat::AverageExpression(pbmc.set, features = DE.gene, group.by = "sample.ID", slot = "data", assays = "RNA")
+  
+  pbmc.set <- tibble::as_tibble(pbmc.set$RNA, rownames = "gene") %>% mutate(gene.name = DE.gene) %>% gather(sample.ID, avg.exprs, BU10:SCN8)
+  
+  #pbmc.set <- reshape2::melt(pbmc.set$RNA)
+  #colnames(pbmc.set)[1:2] <- c("gene", "sample.ID")
+ 
+  Age <- unlist(sapply(1:nrow(pbmc.set), function(x){unique(pbmc.combined@meta.data$age.quartiles[pbmc.combined@meta.data$sample.ID %in% pbmc.set$sample.ID[x]])}))
+
+pbmc.set$age <- Age
+pbmc.set$age <- factor(pbmc.set$age, levels = c("20-39","40-59","60-89", "Extreme Longevity"))
+levels(pbmc.set$age) <- c("Younger", "Middle", "Older", "EL")
+
+plot.sig <- sapply(1:length(DE.gene), function(y){
+  plot.DE <- ggplot(pbmc.set %>% filter(gene.name == DE.gene[y]), aes(age,avg.exprs)) + geom_boxplot(aes(col = age)) + geom_point() + facet_wrap(~ gene.name, scale = "free") + theme_bw(base_size = 20) + ggplot2::scale_color_manual(values = c("blue2", "green","red", "maroon")) + ggtitle(doc.name) + ylab("average expression level")
+  
+  ggplot2::ggsave(
+    filename=paste0("Figure_04_", DE.gene[y], ".pdf"),
+    plot=plot.DE,
+    path=paste0(work.dir,"/Figures"),
+    scale=1,
+    width = 8,
+    height=5,
+    units="in",
+    dpi=300
+)
+  
+})
+
+  
+})
+
+
+
+```
+
+### Heatmap of cell type specific DE signatures
+```{r, eval = F}
+lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  Idents(pbmc.combined) <- "ct.consensus"
+  pbmc.set <- subset(pbmc.combined, idents = cell.types[x])
+  pbmc.set <- Seurat::AverageExpression(pbmc.set, features = DE.sig.genes[[x]], group.by = "sample.ID", slot = "data", assays = "RNA")
+  
+  Age <- unlist(sapply(1:ncol(pbmc.set$RNA), function(y){unique(pbmc.combined@meta.data$age.quartiles[pbmc.combined@meta.data$sample.ID %in% colnames(pbmc.set$RNA)[y]])}))
+
+Age <- factor(Age, levels = c("20-39","40-59","60-89", "Extreme Longevity"))
+levels(Age) <- c("Younger", "Middle", "Older", "EL")
+
+
+require(ComplexHeatmap)
+require(circlize)
+
+ha = HeatmapAnnotation(
+    age = Age,
+    col = list(age = c("Younger" = "blue2", "Middle" = "green", "Older" = "red", "EL" = "maroon")
+    )
+)
+
+pbmc.set_scaled = na.omit(t(apply(pbmc.set$RNA, 1, scale)))
+
+h1 <- ComplexHeatmap::Heatmap(pbmc.set_scaled, cluster_rows = F, cluster_columns = T, name = "scaled average expression", show_row_names = T, show_column_names = F, column_title = doc.name, row_names_gp = gpar(fontsize = 12), top_annotation = ha)
+
+return(h1) 
+  
+})
+
+
+
+```
+
+### Average scaled expression Heatmap of all DE genes for each cell type
+
+```{r}
+DE.sig.genes <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  DE.EL <- readRDS(paste0(work.dir,"Differential_Analysis/JAGS_Output/JAGS.Lifespan/JAGS.Summary/",doc.name,".rds"))
+  DE.EL$gene <- rownames(DE.EL)
+  DE.EL <- DE.EL %>% filter(MY_fdr <= 0.05 | OY_fdr <= 0.05 | EL_fdr <= 0.05) %>% filter(abs(MY_Mean) > log2(1.1) | abs(OY_Mean) > log2(1.1) | abs(EL_Mean) > log2(1.1)) %>% arrange(EL_fdr)
+  
+  return(DE.EL$gene)  
+})
+DE.sig.genes <- unique(do.call(c,DE.sig.genes))
+
+plot.heatmaps <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  Idents(pbmc.combined) <- "ct.consensus"
+  pbmc.set <- subset(pbmc.combined, idents = cell.types[x])
+  Idents(pbmc.set) <- "age.quartiles"
+  # Younger age
+  pbmc.YA <- subset(pbmc.set, idents = "20-39")
+  pbmc.YA <- Seurat::AverageExpression(pbmc.YA, features = DE.sig.genes, group.by = "sample.ID", slot = "data", assays = "RNA")
+  # Middle age
+  pbmc.MA <- subset(pbmc.set, idents = "40-59")
+  pbmc.MA <- Seurat::AverageExpression(pbmc.MA, features = DE.sig.genes, group.by = "sample.ID", slot = "data", assays = "RNA")
+   # Older age
+  pbmc.OA <- subset(pbmc.set, idents = "60-89")
+  pbmc.OA <- Seurat::AverageExpression(pbmc.OA, features = DE.sig.genes, group.by = "sample.ID", slot = "data", assays = "RNA")
+   # EL age
+  pbmc.EL <- subset(pbmc.set, idents = "Extreme Longevity")
+  pbmc.EL <- Seurat::AverageExpression(pbmc.EL, features = DE.sig.genes, group.by = "sample.ID", slot = "data", assays = "RNA")
+
+require(ComplexHeatmap)
+require(circlize)
+
+pbmc.heatmap <- cbind(pbmc.YA$RNA, pbmc.MA$RNA, pbmc.OA$RNA, pbmc.EL$RNA) 
+pbmc.heatmap_scaled = t(apply(pbmc.heatmap, 1, scale))
+
+ha = HeatmapAnnotation(
+    age = c(rep("Younger", dim(pbmc.YA$RNA)[2]), rep("Middle", dim(pbmc.MA$RNA)[2]), rep("Older", dim(pbmc.OA$RNA)[2]), rep("EL", dim(pbmc.EL$RNA)[2])),
+    col = list(age = c("Younger" = "blue2", "Middle" = "green", "Older" = "red", "EL" = "maroon")
+    )
+)
+
+h1 <- ComplexHeatmap::Heatmap(pbmc.heatmap_scaled, cluster_rows = T, cluster_columns = F, name = "scaled average expression", show_row_names = T, show_column_names = F, column_title = doc.name, row_names_gp = gpar(fontsize = 12), top_annotation = ha, na_col = "white")
+
+return(h1) 
+  
+})
+
+plot.heatmaps
+
+plot.heatmaps[[2]] + plot.heatmaps[[3]] + plot.heatmaps[[4]] + plot.heatmaps[[5]] + plot.heatmaps[[7]] + patchwork::plot_layout(ncol = 1)
+
+```
+
+### Scaled expression Heatmap (single cell level) of all DE genes for each cell type
+
+```{r}
+DE.sig.genes <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  DE.EL <- readRDS(paste0(work.dir,"Differential_Analysis/JAGS_Output/JAGS.Lifespan/JAGS.Summary/",doc.name,".rds"))
+  DE.EL$gene <- rownames(DE.EL)
+  DE.EL <- DE.EL %>% filter(MY_fdr <= 0.05 | OY_fdr <= 0.05 | EL_fdr <= 0.05) %>% filter(abs(MY_Mean) > log2(1.1) | abs(OY_Mean) > log2(1.1) | abs(EL_Mean) > log2(1.1)) %>% arrange(EL_fdr)
+  
+  return(DE.EL$gene)  
+})
+DE.sig.genes <- unique(do.call(c,DE.sig.genes))
+
+plot.heatmaps <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  Idents(pbmc.combined) <- "ct.consensus"
+  
+  plot.ct <- DoHeatmap(pbmc.combined, features = DE.sig.genes, cells = WhichCells(pbmc.combined, idents = cell.types[x]), group.by = "age.quartiles", group.colors = c("blue2", "green","red", "maroon"), group.bar = TRUE)
+  
+  return(plot.ct)
+})
+  pbmc.set <- subset(pbmc.combined, idents = cell.types[x])
+  Idents(pbmc.set) <- "age.quartiles"
+  # Younger age
+  pbmc.YA <- subset(pbmc.set, idents = "20-39")
+  pbmc.YA.exprs <- as.matrix(GetAssayData(pbmc.YA, features = , slot = 'data', assay = 'RNA'))[DE.sig.genes,]
+  # Middle age
+  pbmc.MA <- subset(pbmc.set, idents = "40-59")
+  pbmc.MA.exprs <- as.matrix(GetAssayData(pbmc.MA, slot = 'data', assay = 'RNA'))
+
+   # Older age
+  pbmc.OA <- subset(pbmc.set, idents = "60-89")
+  pbmc.OA.exprs <- as.matrix(GetAssayData(pbmc.OA, slot = 'data', assay = 'RNA')) 
+   # EL age
+  pbmc.EL <- subset(pbmc.set, idents = "Extreme Longevity")
+  pbmc.EL.exprs <- as.matrix(GetAssayData(pbmc.EL, slot = 'data', assay = 'RNA'))
+
+require(ComplexHeatmap)
+require(circlize)
+
+pbmc.heatmap <- cbind.data.frame(pbmc.YA.exprs, pbmc.MA.exprs, pbmc.OA.exprs, pbmc.EL.exprs)
+pbmc.heatmap_scaled = na.omit(t(apply(pbmc.heatmap, 1, scale)))
+
+ha = HeatmapAnnotation(
+    age = c(rep("Younger", dim(pbmc.YA$RNA)[2]), rep("Middle", dim(pbmc.MA$RNA)[2]), rep("Older", dim(pbmc.OA$RNA)[2]), rep("EL", dim(pbmc.EL$RNA)[2])),
+    col = list(age = c("Younger" = "blue2", "Middle" = "green", "Older" = "red", "EL" = "maroon")
+    )
+)
+
+h1 <- ComplexHeatmap::Heatmap(pbmc.heatmap_scaled, cluster_rows = T, cluster_columns = F, name = "scaled average expression", show_row_names = T, show_column_names = F, column_title = doc.name, row_names_gp = gpar(fontsize = 12), top_annotation = ha, na_col = "white")
+
+return(h1) 
+  
+})
+
+plot.heatmaps
+
+plot.heatmaps[[2]] + plot.heatmaps[[3]] + plot.heatmaps[[4]] + plot.heatmaps[[5]] + plot.heatmaps[[7]] + patchwork::plot_layout(ncol = 1)
+
+```
+
+
+```{r}
+#color for cell types
+require(ggforce)
+colors.age <- c(riso_color("midnight"),
+  riso_color("turquoise"),
+    riso_color("scarlet"),
+    riso_color("cornflower"),
+    riso_color("burgundy"),
+    riso_color("indigo"),
+    riso_color("brick"),
+  riso_color("pumpkin", alpha = 0.9),
+  riso_color("lagoon", alpha = 0.8))
+
+names(colors.age) <- cell.types
+
+```
+
+### Single Heatmap of results: Figure 4B 
+```{r}
+cell.types <- c("CD4 T Naive", "CD4 T Memory","CD8 T","NK","BC Naive","BC Memory","M14","M16","mDC")
+
+DE.sig.genes <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  DE.EL <- readRDS(paste0(work.dir,"Differential_Analysis/JAGS_Output/JAGS.Lifespan/JAGS.Summary/",doc.name,".rds"))
+  DE.EL$gene <- rownames(DE.EL)
+  DE.EL <- DE.EL %>% filter(MY_fdr <= 0.05 | OY_fdr <= 0.05 | EL_fdr <= 0.05) %>% filter(abs(MY_Mean) > log2(1.1) | abs(OY_Mean) > log2(1.1) | abs(EL_Mean) > log2(1.1)) %>% arrange(EL_fdr)
+  
+  return(DE.EL$gene)  
+})
+DE.sig.genes <- unique(do.call(c,DE.sig.genes))
+
+#Average expression of DE genes for younger age samples across cell types
+#n.YA <- colSums(table(pbmc.combined@meta.data %>% filter(age.quartiles == "20-39") %>% group_by(sample.ID, ct.consensus) %>% dplyr::summarise()))
+
+YA.DE <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  Idents(pbmc.combined) <- "ct.consensus"
+  pbmc.set <- subset(pbmc.combined, idents = cell.types[x])
+  Idents(pbmc.set) <- "age.quartiles"
+  pbmc.set <- subset(pbmc.set, idents = "20-39")
+  pbmc.set <- Seurat::AverageExpression(pbmc.set, features = DE.sig.genes, group.by = "sample.ID", slot = "data", assays = "RNA")
+  colnames(pbmc.set$RNA) <- paste0(colnames(pbmc.set$RNA),".",doc.name)
+  return(list(pbmc.set$RNA, dim(pbmc.set$RNA)[2]))
+})
+YA.Heatmap <- do.call(cbind, lapply(1:length(YA.DE), function(x){YA.DE[[x]][[1]]}))
+
+n.YA <- do.call(cbind, lapply(1:length(YA.DE), function(x){YA.DE[[x]][[2]]}))
+
+n.ct.YA <- do.call(c, lapply(1:length(cell.types), function(x){
+    doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+     n.ct <- rep(doc.name, n.YA[x])
+     return(n.ct)
+ }))
+
+
+#Middle Heatmap
+
+MA.DE <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  Idents(pbmc.combined) <- "ct.consensus"
+  pbmc.set <- subset(pbmc.combined, idents = cell.types[x])
+  Idents(pbmc.set) <- "age.quartiles"
+  pbmc.set <- subset(pbmc.set, idents = "40-59")
+  pbmc.set <- Seurat::AverageExpression(pbmc.set, features = DE.sig.genes, group.by = "sample.ID", slot = "data", assays = "RNA")
+  colnames(pbmc.set$RNA) <- paste0(colnames(pbmc.set$RNA),".",doc.name)
+ return(list(pbmc.set$RNA, dim(pbmc.set$RNA)[2]))
+})
+MA.Heatmap <- do.call(cbind, lapply(1:length(MA.DE), function(x){MA.DE[[x]][[1]]}))
+
+n.MA <- do.call(cbind, lapply(1:length(MA.DE), function(x){MA.DE[[x]][[2]]}))
+
+n.ct.MA <- do.call(c, lapply(1:length(cell.types), function(x){
+    doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+     n.ct <- rep(doc.name, n.MA[x])
+     return(n.ct)
+ }))
+
+
+##Older
+
+OA.DE <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  Idents(pbmc.combined) <- "ct.consensus"
+  pbmc.set <- subset(pbmc.combined, idents = cell.types[x])
+  Idents(pbmc.set) <- "age.quartiles"
+  pbmc.set <- subset(pbmc.set, idents = "60-89")
+  pbmc.set <- Seurat::AverageExpression(pbmc.set, features = DE.sig.genes, group.by = "sample.ID", slot = "data", assays = "RNA")
+  colnames(pbmc.set$RNA) <- paste0(colnames(pbmc.set$RNA),".",doc.name)
+ return(list(pbmc.set$RNA, dim(pbmc.set$RNA)[2]))
+})
+OA.Heatmap <- do.call(cbind, lapply(1:length(OA.DE), function(x){OA.DE[[x]][[1]]}))
+
+n.OA <- do.call(cbind, lapply(1:length(OA.DE), function(x){OA.DE[[x]][[2]]}))
+
+n.ct.OA  <- do.call(c, lapply(1:length(cell.types), function(x){
+    doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+     n.ct <- rep(doc.name, n.OA[x])
+     return(n.ct)
+ }))
+
+## EL
+
+EL.DE <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  Idents(pbmc.combined) <- "ct.consensus"
+  pbmc.set <- subset(pbmc.combined, idents = cell.types[x])
+  Idents(pbmc.set) <- "age.quartiles"
+  pbmc.set <- subset(pbmc.set, idents = "Extreme Longevity")
+  pbmc.set <- Seurat::AverageExpression(pbmc.set, features = DE.sig.genes, group.by = "sample.ID", slot = "data", assays = "RNA")
+  colnames(pbmc.set$RNA) <- paste0(colnames(pbmc.set$RNA),".",doc.name)
+ return(list(pbmc.set$RNA, dim(pbmc.set$RNA)[2]))
+})
+EL.Heatmap <- do.call(cbind, lapply(1:length(EL.DE), function(x){EL.DE[[x]][[1]]}))
+
+n.EL <- do.call(cbind, lapply(1:length(EL.DE), function(x){EL.DE[[x]][[2]]}))
+
+n.ct.EL <- do.call(c, lapply(1:length(cell.types), function(x){
+    doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+     n.ct <- rep(doc.name, n.EL[x])
+     return(n.ct)
+ }))
+
+
+
+### Single heatmap with everything
+
+DE.Heatmap <- cbind(YA.Heatmap, MA.Heatmap, OA.Heatmap, EL.Heatmap)
+DE.Heatmap_scaled = na.omit(t(apply(DE.Heatmap, 1, scale)))
+
+require(ComplexHeatmap)
+require(circlize)
+
+ha <- HeatmapAnnotation(
+    cell.type = c(n.ct.YA, n.ct.MA, n.ct.OA, n.ct.EL), 
+    age = c(rep("Younger", dim(YA.Heatmap)[2]), rep("Middle", dim(MA.Heatmap)[2]), rep("Older", dim(OA.Heatmap)[2]), rep("EL", dim(EL.Heatmap)[2])),
+    col = list(age = c("Younger" = "blue2", "Middle" = "green", "Older" = "red", "EL" = "maroon"),
+               cell.type = c("CD4_T_Naive" = "cadetblue2",
+                              "CD4_T_Memory" = "cornflowerblue",
+                             "CD8_T" = "aquamarine3",
+                             "NK" = "seagreen",
+                             "BC_Naive" = "mediumpurple2",
+                             "BC_Memory" = "purple2",
+                             "M14" = "pink2",
+                             "M16" = "red3",
+                             "mDC" = "sienna2")
+            )
+    )
+
+h1 <- ComplexHeatmap::Heatmap(DE.Heatmap_scaled, cluster_rows = T, cluster_columns = F, name = "scaled average expression", show_row_names = T, show_column_names = F, row_names_gp = gpar(fontsize = 10), na_col = "white", top_annotation = ha)
+
+
+h1
+```
+
+
+
+
+
+### Heatmap of union of top significant genes (based on fdr) across aging and EL
+```{r, echo = F, eval = F}
+ 
+#cell.types <- c("CD4 T Naive", "CD4 T Memory","CD8 T","NK","BC Memory","BC Naive","M14","M16","mDC","pDC")
+
+DE.sig.genes <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  DE.EL <- readRDS(paste0(work.dir,"Differential_Analysis/JAGS_Output/JAGS.Lifespan/JAGS.Summary/",doc.name,".rds"))
+  DE.EL$gene <- rownames(DE.EL)
+  DE.EL <- DE.EL %>% filter(MY_fdr <= 0.05 | OY_fdr <= 0.05 | EL_fdr <= 0.05) %>% filter(abs(MY_Mean) > log2(1.1) | abs(OY_Mean) > log2(1.1) | abs(EL_Mean) > log2(1.1)) %>% arrange(EL_fdr)
+  
+  return(DE.EL$gene)  
+})
+DE.sig.genes <- unique(do.call(c,DE.sig.genes))
+
+
+Middle.Heatmap <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  DE.Age <- readRDS(paste0(work.dir,"Differential_Analysis/JAGS_Output/JAGS.Lifespan/JAGS.Summary/",doc.name,".rds"))
+  DE.Age$gene <- rownames(DE.Age)
+  Unique.Age <- sapply(1:length(DE.sig.genes), function(x){
+    if (sum(DE.sig.genes[x] %in% DE.Age$gene) != 0){
+      sig <- DE.Age$MY_Mean[DE.Age$gene %in% DE.sig.genes[x]]
+      return(sig)
+    }else{
+      return(NA)
+    }
+  })
+  return(Unique.Age)
+})
+Middle.Heatmap <- do.call(cbind, Middle.Heatmap)
+rownames(Middle.Heatmap) <- DE.sig.genes
+colnames(Middle.Heatmap) <- c("CD4 T Naive", "CD4 T Memory", "CD8 T Cytotoxic", "Natural Killer", "B Memory", "B Naive", "CD14 Mono", "CD16 Mono", "Myeloid DC")
+
+Older.Heatmap <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  DE.Age <- readRDS(paste0(work.dir,"Differential_Analysis/JAGS_Output/JAGS.Lifespan/JAGS.Summary/",doc.name,".rds"))
+  DE.Age$gene <- rownames(DE.Age)
+  Unique.Age <- sapply(1:length(DE.sig.genes), function(x){
+    if (sum(DE.sig.genes[x] %in% DE.Age$gene) != 0){
+      sig <- DE.Age$OY_Mean[DE.Age$gene %in% DE.sig.genes[x]]
+      return(sig)
+    }else{
+      return(NA)
+    }
+  })
+  return(Unique.Age)
+})
+Older.Heatmap <- do.call(cbind, Older.Heatmap)
+rownames(Older.Heatmap) <- DE.sig.genes
+colnames(Older.Heatmap) <- c("CD4 T Naive", "CD4 T Memory", "CD8 T Cytotoxic", "Natural Killer", "B Memory", "B Naive", "CD14 Mono", "CD16 Mono", "Myeloid DC")
+
+
+EL.Heatmap <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  DE.EL <- readRDS(paste0(work.dir,"Differential_Analysis/JAGS_Output/JAGS.Lifespan/JAGS.Summary/",doc.name,".rds"))
+  DE.EL$gene <- rownames(DE.EL)
+  Unique.EL <- sapply(1:length(DE.sig.genes), function(x){
+    if (sum(DE.sig.genes[x] %in% DE.EL$gene) != 0){
+      sig <- DE.EL$EL_Mean[DE.EL$gene %in% DE.sig.genes[x]]
+      return(sig)
+    }else{
+      return(NA)
+    }
+  })
+  return(Unique.EL)
+})
+EL.Heatmap <- do.call(cbind, EL.Heatmap)
+rownames(EL.Heatmap) <- DE.sig.genes
+colnames(EL.Heatmap) <- c("CD4 T Naive", "CD4 T Memory", "CD8 T Cytotoxic", "Natural Killer", "B Memory", "B Naive", "CD14 Mono", "CD16 Mono", "Myeloid DC")
+
+require(circlize)
+require(ComplexHeatmap)
+DE.Heatmap <- cbind(Middle.Heatmap, Older.Heatmap, EL.Heatmap)
+DE.Heatmap <- t(apply(2^DE.Heatmap,1,scale))
+#col_fun = colorRamp2(c(-4,0,4),c("darkblue", "white", "darkred"))
+#col_fun = colorRamp2(c(0,1.1,4),c("blue", "white", "red"))
+
+ha <- HeatmapAnnotation(
+    cell.type = c(rep(cell.types, 3)), 
+    age = c(rep("Middle.v.Younger", 9), rep("Older.v.Younger", 9), rep("EL.v.Younger", 9)),
+    col = list(age = c("Middle.v.Younger" = "green", "Older.v.Younger" = "red", "EL.v.Younger" = "maroon"))
+    )
+
+h1 <- ComplexHeatmap::Heatmap(DE.Heatmap, cluster_rows = T, cluster_columns = F, name = "scaled FC", show_row_names = T, show_column_names = T, column_title = "Cell type specific signatures across the human lifespan", row_names_gp = gpar(fontsize = 12), na_col = "white", top_annotation = ha)
+
+h1 <- ComplexHeatmap::Heatmap(as.matrix(t(scale(t(2^Middle.Heatmap)))), cluster_rows = F, cluster_columns = F, name = "scaled FC", show_row_names = F, show_column_names = T, column_title = "Middle vs. Younger Age", row_names_gp = gpar(fontsize = 12), na_col = "white")
+h2 <- ComplexHeatmap::Heatmap(as.matrix(t(scale(t(2^Older.Heatmap)))), cluster_rows = F, cluster_columns = F, name = "scaled FC", show_row_names = F,  show_column_names = T, column_title = "Older vs. Younger Age", row_names_gp = gpar(fontsize = 12), na_col = "white")
+h3 <- ComplexHeatmap::Heatmap(as.matrix(t(scale(t(2^EL.Heatmap)))), cluster_rows = F, cluster_columns = F, name = "scaled FC", show_row_names = T,  show_column_names = T, column_title = "EL vs. Younger Controls", row_names_gp = gpar(fontsize = 12), na_col = "white")
+
+#pdf(paste0(work.dir,"DE.Heatmap.pdf"),10,10)
+print(h1 + h2 + h3)
+#dev.off()
+
+
+```
+
+### Forest Plot for each cell type for significant genes specific to each cell type
+```{r, fig.dim=c(20,10)}
+Forest.sig.plot <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  DE.EL <- readRDS(paste0(work.dir,"Differential_Analysis/JAGS_Output/JAGS.Lifespan/JAGS.Summary/",doc.name,".rds"))
+  DE.EL$gene <- rownames(DE.EL)
+  DE.EL <- DE.EL %>% filter(MY_fdr <= 0.05 | OY_fdr <= 0.05 | EL_fdr <= 0.05) %>% filter(abs(MY_Mean) > log2(1.1) | abs(OY_Mean) > log2(1.1) | abs(EL_Mean) > log2(1.1)) %>% arrange(EL_fdr)
+  
+  #Forest plot for Middle Age
+  DE.EL$MY_direction[2^DE.EL$MY_Mean < 1] <- 2
+  DE.EL$MY_direction[2^DE.EL$MY_Mean > 1] <- 1
+  DE.EL$MY_direction <- factor(DE.EL$MY_direction)
+  levels(DE.EL$MY_direction) <- c("Up", "Down")
+  fp.Middle <- ggplot(data=DE.EL) +
+    geom_pointrange(aes(x=gene, y=2^MY_Mean, ymin=2^MY_X2.5., ymax=2^MY_X97.5., color = MY_direction), position = position_dodge(width = 1))+
+    coord_flip() +  # flip coordinates (puts labels on y axis)
+    xlab("gene") + ylab("FC (95% CI)") + ggtitle("Middle v. Younger Age") +
+    ylim(0,2) +
+    scale_color_manual(values=c("blue", "red")) +
+    geom_hline(yintercept = 1, linetype="dotted", color = "grey", size=1.5) +
+    theme(legend.position = "none") +
+    theme_bw(base_size = 20)  # use a white background
+  fp.Middle
+
+#Forest plot for Older Age
+  DE.EL$OY_direction[2^DE.EL$OY_Mean < 1] <- 2
+  DE.EL$OY_direction[2^DE.EL$OY_Mean > 1] <- 1
+  DE.EL$OY_direction <- factor(DE.EL$OY_direction)
+  levels(DE.EL$OY_direction) <- c("Up", "Down")
+  fp.Older <- ggplot(data=DE.EL) +
+    geom_pointrange(aes(x=gene, y=2^OY_Mean, ymin=2^OY_X2.5., ymax=2^OY_X97.5., color = OY_direction), position = position_dodge(width = 1))+
+    coord_flip() +  # flip coordinates (puts labels on y axis)
+    xlab("gene") + ylab("FC (95% CI)") + ggtitle("Older v. Younger Age") +
+    ylim(0,2) +
+    scale_color_manual(values=c("blue", "red")) +
+    geom_hline(yintercept = 1, linetype="dotted", color = "grey", size=1.5) +
+    theme(legend.position = "none") +
+    theme_bw(base_size = 20)  # use a white background
+  fp.Older
+
+  #Forest plot for Older Age
+  DE.EL$direction[2^DE.EL$EL_Mean < 1] <- 2
+  DE.EL$direction[2^DE.EL$EL_Mean > 1] <- 1
+  DE.EL$direction <- factor(DE.EL$direction)
+  levels(DE.EL$direction) <- c("Up", "Down")
+  fp.EL <- ggplot(data=DE.EL) +
+    geom_pointrange(aes(x=gene, y=2^EL_Mean, ymin=2^EL_X2.5., ymax=2^EL_X97.5., color = direction), position = position_dodge(width = 1))+
+    coord_flip() +  # flip coordinates (puts labels on y axis)
+    xlab("gene") + ylab("FC (95% CI)") + ggtitle("EL v. Younger Age") +
+    ylim(0,2) +
+    scale_color_manual(values=c("blue", "red")) +
+    geom_hline(yintercept = 1, linetype="dotted", color = "grey", size=1.5) +
+    theme_bw(base_size = 20)  # use a white background
+  fp.EL
+  
+  #Combined plots in same panel
+  
+  require(patchwork)
+  cell.type.names <- c("CD4 T Naive", "CD4 T Memory", "CD8 T Cytotoxic", "Natural Killer", "B Memory", "B Naive", "CD14 Mono", "CD16 Mono", "Myeloid DC")
+
+  fp.lifespan <- fp.Middle + 
+                 fp.Older + 
+                 fp.EL + 
+                 patchwork::plot_layout(nrow = 1) +
+                 plot_annotation(title =cell.type.names[x],
+                                 theme = theme(plot.title = element_text(size = 30)),
+                                caption = 'FDR <= 0.05 and abs(logFC) < log2(1.1)',
+                                )
+  
+  return(fp.lifespan)  
+})
+
+lapply(1:length(cell.types), function(x){
+  Forest.sig.plot[[x]]
+})
+
+
+
+```
+
+## Check tau ratios across genes for each cell type (tau/tau.s)
+```{r}
+#function to trim tails based on percentile
+trim_q <- function(x, lb, ub){
+  x[(x > quantile(x, lb)) & (x < quantile(x, ub))]
+}
+
+
+#plot tau ratios
+var.ratio <- lapply(1:length(cell.types), function(x){
+  cell.type.names <- c("CD4 T Naive", "CD4 T Memory", "CD8 T Cytotoxic", "Natural Killer", "B Memory", "B Naive", "CD14 Mono", "CD16 Mono", "Myeloid DC")
+  #read in tau ratios for each cell type
+  tau.ratios <- readRDS(paste0(work.dir,"Differential_Analysis/JAGS_Output/JAGS.Lifespan/JAGS.Summary/tau.ratios.rds"))
+  #for specific cell type, trim out 1% of tails
+  tau.ratios <- trim_q(tau.ratios[[cell.types[x]]] , 0.01, 0.99) 
+  #plot tau ratios
+  tau.ratio.plot <- ggplot(data.frame(tau.ratio = tau.ratios), aes(tau.ratio)) + geom_histogram(color="black", fill="white") + geom_vline(aes(xintercept=0), color="blue", linetype="dashed", size=1) + xlab("tau ratio") + ggtitle(cell.type.names[x])
+  
+  return(tau.ratio.plot)  
+})
+
+#print out tau ratios
+lapply(1:length(cell.types), function(x){
+  var.ratio[[x]]
+})
+
+
+```
+
+
+```{r, eval = F, echo = F}
+DE.sig.genes <- lapply(1:length(cell.types), function(x){
+  doc.name <- str_replace_all(cell.types[x], fixed(" "), "_")
+  DE.EL <- readRDS(paste0(work.dir,"Differential_Analysis/JAGS_Output/JAGS.Lifespan/JAGS.Summary/",doc.name,".rds"))
+  DE.EL$gene <- rownames(DE.EL)
+  DE.EL <- DE.EL %>% filter(MY_fdr <= 0.05 | OY_fdr <= 0.05 | EL_fdr <= 0.05) %>% filter(abs(MY_Mean) > log2(1.1) | abs(OY_Mean) > log2(1.1) | abs(EL_Mean) > log2(1.1)) %>% arrange(EL_fdr)
+  
+  return(DE.EL$gene)  
+})
+DE.sig.genes <- unique(do.call(c,DE.sig.genes))
+
+
+Bulk.sig.genes <- unique(c(Middle_v_Younger_sig_genes$gene, Older_v_Younger_sig_genes$gene, EL_v_Younger_sig_genes$gene))
+
+
+sc.bulk.venn <- ggvenn::ggvenn(list("single cell" = DE.sig.genes, "bulk" = Bulk.sig.genes))
+
+gridExtra::grid.table(data.frame("Common" = DE.sig.genes[DE.sig.genes %in% Bulk.sig.genes]))
+
+
+Aging.markers <- c("HSPA6", "TNFRSF1A","HMOX1","GAA","CTSH","CTSD","CTSS", 
+                   "TNFRSF1B","TUBA1B","EIF4A1","CD86","MAX","PRDX6","LCK","CD28","CD69")
+
+aging.bulk.venn <- sc.bulk.venn <- ggvenn::ggvenn(list("aging.markers" = Aging.markers, "bulk" = Bulk.sig.genes))
+
+
+
+gridExtra::grid.table(data.frame("Common" = Aging.markers[Aging.markers %in% Bulk.sig.genes]))
+                      
+#aging markers are found in the bulk analysis
+middle.bulk.venn <- ggvenn::ggvenn(list("aging.markers" = Aging.markers, "bulk.Middle.v.Younger" = Middle_v_Younger_sig_genes$gene))
+older.bulk.venn <- ggvenn::ggvenn(list("aging.markers" = Aging.markers, "bulk.Older.v.Younger" = Older_v_Younger_sig_genes$gene))
+EL.bulk.venn <- ggvenn::ggvenn(list("aging.markers" = Aging.markers, "bulk.EL.v.Younger" = EL_v_Younger_sig_genes$gene))
+
+logFC.EL.aging <- EL_v_Younger_sig_genes[EL_v_Younger_sig_genes$gene %in%  Aging.markers[Aging.markers %in% Bulk.sig.genes], ]
+
+aging.sc.venn <- ggvenn::ggvenn(list("aging.markers" = Aging.markers, "single cell" = DE.sig.genes))
+
+Aging.markers[Aging.markers %in% DE.sig.genes]
+```
