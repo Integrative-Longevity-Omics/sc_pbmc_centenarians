@@ -1,0 +1,373 @@
+---
+title: "Single cell analysis of CITE-seq data of centenarians from NECS Study: Final cell types identified and silhoutte scores"
+author: "Tanya Karagiannis, Stefano Monti, Paola Sebastiani"
+output:
+  html_document:
+    theme: united
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+```{r}
+knitr::opts_chunk$set(fig.width=12, fig.height=8) 
+
+```
+
+```{r}
+#Functions and genesets
+source("/rprojectnb2/montilab-p/personal/tanya/functions/vlnplot.functions.R")
+immune.genesets <- readRDS("/rprojectnb2/montilab-p/personal/tanya/functions/genesets/immune.genesets.rds")
+
+```
+
+```{r data, include=FALSE}
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(reshape2)
+
+work.dir <- "/restricted/projectnb/montilab-p/projects/longevity/scCentenarians/scCentenarians/NECS_Analysis/"
+
+pbmc.necs <- readRDS(paste0(work.dir,"Data/pbmc.necs.rds"))
+#factor cell types
+cell.types <- c("CD4 T Naive", "CD4 T Memory","CD4 T Cytotoxic","CD8 T","NK","BC Naive","BC Memory","M14","M16","mDC","pDC", "MGK")
+
+pbmc.necs$ct.consensus <- factor(pbmc.necs$ct.consensus, levels = cell.types)
+```
+
+Average silhoutte score based on batch for each cell type
+- Before correction
+- After Harmony correction in PCA space
+```{r,eval = F}
+batch_sil <- function(pca.data, batch, nPCs = 20){
+  require(cluster)
+    # in scone, they use svd to compute principal components.
+    # For now, we'll keep the PCA object created in
+    # prcomp to be consistent
+    # proj <- svd(scale(t(expr),center = TRUE,scale = TRUE),
+    #             nu = 3, nv =0)$u
+
+    dd <- as.matrix(dist(pca.data[, seq_len(nPCs)]))
+    summary(silhouette(as.numeric(batch), dd))$avg.width
+}
+
+cell.types <- levels(pbmc.necs$ct.consensus)
+#pca.data <- pbmc@reductions$pca@cell.embeddings
+
+pca.sil.score <- lapply(1:length(cell.types), function(x){
+  ct.order <- which(pbmc.necs@meta.data$ct.consensus == cell.types[x])
+  ct.cells <- rownames(pbmc.necs@meta.data)[ct.order]
+  pca.data <- pbmc.necs@reductions$pca@cell.embeddings[ct.cells,]
+  batch <- as.factor(pbmc.necs@meta.data$batch[ct.order])
+
+  pca.sil <- batch_sil(pca.data, batch, nPCs = 20)
+  return(pca.sil)
+})
+pca.sil.score <- unlist(pca.sil.score)
+names(pca.sil.score) <- cell.types
+
+
+harmony.sil.score <- lapply(1:length(cell.types), function(x){
+  ct.order <- which(pbmc.necs@meta.data$ct.consensus == cell.types[x])
+  ct.cells <- rownames(pbmc.necs@meta.data)[ct.order]
+  pca.data <- pbmc.necs@reductions$harmony@cell.embeddings[ct.cells,]
+  batch <- as.factor(pbmc.necs@meta.data$batch[ct.order])
+
+  pca.sil <- batch_sil(pca.data, batch, nPCs = 20)
+  return(pca.sil)
+})
+harmony.sil.score <- unlist(harmony.sil.score)
+names(harmony.sil.score) <- cell.types
+
+sil.score <- data.frame(pre = pca.sil.score, post = harmony.sil.score)
+write.csv(sil.score, file = paste0(Data/"sil.score.NECS.csv"))
+
+sil.score <- reshape2::melt(sil.score)
+ggplot2::ggplot(sil.score, aes(
+  x = variable, y = value,
+  fill = variable), color = "black") +
+  ggplot2::geom_boxplot() +
+  ylab("silhoutte score") + xlab("batch")+
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#significance between silhoutte scores pre and post batch correction
+t.test(value ~ variable, data = sil.score)
+
+```
+
+Visualizing final cell types and samples for NECS single cell dataset
+- consensus cell types
+- centenarians vs. control age groups
+```{r umap}
+#cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+#age.group <- c(cbPalette[6], cbPalette[8])
+
+
+#Visualizing UMAP of consensus cell types
+DimPlot(pbmc.necs, pt.size = 1,group.by = "ct.consensus")
+
+#visualizing UMAP of samples
+#sample.ID colors
+samp.col <- colorRamps::primary.colors(9, steps = 2)
+
+pbmc.necs$age.group <- factor(pbmc.necs$age.group, levels = c("CT", "EL"))
+DimPlot(pbmc.necs, group.by = "sample.ID")
+
+#number of cell per sample
+dat <- melt(apply(table(pbmc.necs$sample.ID, pbmc.necs$orig.ident),1,sum))
+dat$sample.ID <- rownames(dat)
+ggplot(dat, aes(sample.ID, value, fill = sample.ID)) +
+    geom_col() + theme_classic(base_size = 20) + coord_flip()
+```
+
+Expression of protein markers across main cell types
+```{r}
+Protein_Res <- cbind.data.frame(as.matrix(pbmc.necs$ADT.cell.types), t(as.matrix(pbmc.necs[['ADT']]@data)))
+colnames(Protein_Res)[1] <- "cell.types"
+Protein_Res <- reshape2::melt(Protein_Res)
+#Protein_Res$cell.types <- factor(Protein_Res$cell.types, levels = c("NonCytotoxic T", "Cytotoxic T", "NK", "BC", "Monocyte", "DC", "Myeloid"))
+Protein_Res$variable <- factor(Protein_Res$variable, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A","CD274","PDCD1"))
+#Protein_Res$cell.types <- factor(Protein_Res$cell.types, levels = cell.types)
+
+#Protein_Res <- Protein_Res %>% filter(cell.types != "MGK" & cell.types != "CD4 T Cytotoxic" & cell.types != "T gamma delta" & cell.types != "mDC" & cell.types != "pDC")
+
+DimPlot(pbmc.necs, group.by = "ADT.cell.types")
+
+require(ggplot2)
+ggplot2::ggplot(Protein_Res, aes(
+  x = variable, y = value,
+  fill = variable), color = "grey") +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~cell.types, scales="fixed", nrow = 2) +
+  ylab("expression levels") + xlab("protein markers")+
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+```
+
+Expression of protein markers across final cell types
+```{r}
+Protein_Res <- cbind.data.frame(as.matrix(pbmc.necs$ct.consensus), t(as.matrix(pbmc.necs[['ADT']]@data)))
+colnames(Protein_Res)[1] <- "cell.types"
+Protein_Res <- reshape2::melt(Protein_Res)
+#Protein_Res$cell.types <- factor(Protein_Res$cell.types, levels = c("NonCytotoxic T", "Cytotoxic T", "NK", "BC", "Monocyte", "DC", "Myeloid"))
+Protein_Res$variable <- factor(Protein_Res$variable, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A","CD274","PDCD1"))
+Protein_Res$cell.types <- factor(Protein_Res$cell.types, levels = cell.types)
+
+#Protein_Res <- Protein_Res %>% filter(cell.types != "MGK" & cell.types != "CD4 T Cytotoxic" & cell.types != "T gamma delta" & cell.types != "mDC" & cell.types != "pDC")
+
+DimPlot(pbmc.necs, group.by = "ct.consensus")
+
+require(ggplot2)
+ggplot2::ggplot(Protein_Res, aes(
+  x = variable, y = value,
+  fill = variable), color = "grey") +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~cell.types, scales="fixed", nrow = 2) +
+  ylab("expression levels") + xlab("protein markers")+
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+Myeloid: average absolute scaled expression scores for each subtype
+```{r}
+Idents(pbmc.necs) <- "ct.consensus"
+Myeloid <- subset(pbmc.necs, idents = c("M14","M16","mDC", "pDC", "MGK"))
+Myeloid$ct.consensus <- droplevels(Myeloid$ct.consensus)
+
+
+Myeloid.genesets <- c(immune.genesets[c("Monocyte","Mono.Mac","DC1","pDC.precursor","Megakaryocyte")])
+Myeloid1 <- AddModuleScore(Myeloid, features = Myeloid.genesets, name = names(Myeloid.genesets))
+
+cell.types <- levels(Myeloid1$ct.consensus)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Myeloid1) <- "ct.consensus"
+  Myeloid1 <- subset(Myeloid1, idents = c(cell.types[x]))
+  group <- Myeloid1$ct.consensus
+  meta.data <- abs(Myeloid1@meta.data[c(16:20)])
+  plot.sets <- vlnplot(Myeloid1, meta.data,group = group,cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+plot.sets
+
+#gridExtra::grid.arrange(plot.sets[[1]],plot.sets[[2]], nrow = 1)
+```
+
+
+Lymphocytes: average absolute scaled expression scores for each subtype
+```{r}
+Idents(pbmc.necs) <- "ct.consensus"
+Tcells <- subset(pbmc.necs, idents = c("CD4 T Naive", "CD4 T Memory","CD8 T","NK","BC Naive", "BC Memory"))
+Tcells$ct.consensus <- droplevels(Tcells$ct.consensus)
+
+CD4Memory.sig <- list("T cells CD4 memory" = unique(do.call(c,immune.genesets[c("T cells CD4 memory resting", "T cells CD4 memory activated")])))
+NK.sig <- list("NK cells" = unique(do.call(c,immune.genesets[c("NK cells resting", "NK cells activated")])))
+
+lymp.genesets <- c(immune.genesets[c("T cells CD4 naive")], CD4Memory.sig,immune.genesets[c("T cells CD8", "T cells gamma delta")], immune.genesets[c("B cells naive", "B cells memory")],NK.sig)
+Tcells.genesets <- c(lymp.genesets)
+Tcells1 <- AddModuleScore(Tcells, features = Tcells.genesets, name = names(Tcells.genesets))
+
+cell.types <- levels(Tcells1$ct.consensus)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Tcells1) <- "ct.consensus"
+  Tcells1 <- subset(Tcells1, idents = c(cell.types[x]))
+  group <- Tcells1$ct.consensus
+  meta.data <- abs(Tcells1@meta.data[c(16:22)])
+  plot.sets <- vlnplot(Tcells1, meta.data,group = group,cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+plot.sets
+
+#gridExtra::grid.arrange(plot.sets[[1]],plot.sets[[2]],plot.sets[[3]], plot.sets[[4]], plot.sets[[5]], plot.sets[[6]], nrow = 2)
+```
+
+Average expression of cytotoxic genes across lymphocyte populations
+```{r}
+DotPlot(pbmc.necs, features = c("GZMH","GZMB","GZMA","PRF1"), group.by = "ct.consensus")
+
+```
+
+Protein expression vs mRNA expression markers
+```{r, eval = F, echo = F}
+#centered log normalization of protein expression
+
+DefaultAssay(pbmc.necs) <- "ADT"
+pbmc.necs <- NormalizeData(pbmc.necs, assay = "ADT", normalization.method = "CLR") %>%
+  ScaleData(assay = "ADT", split.by = "batch")
+
+#All samples together
+protein.markers <- rownames(pbmc.necs)
+protein.feature <- FeaturePlot(pbmc.necs, features = rownames(pbmc.necs), cols = c("#f0f0f0", brewer.pal(9,"OrRd")), combine = F, max.cutoff = "q99", pt.size = 0.5)
+
+protein.feature
+
+
+#mRNA expression for all samples
+#All samples together
+DefaultAssay(pbmc.necs) <- "RNA"
+RNA.feature <- FeaturePlot(pbmc.necs, features = protein.markers, cols = c("#f0f0f0", brewer.pal(9,"OrRd")), combine = F, max.cutoff = "q99", pt.size = 0.5)
+RNA.feature
+
+#combined protein and mRNA umap plots
+umap.feature <- c(RNA.feature[1:5], protein.feature[1:5], RNA.feature[6:10], protein.feature[6:10])
+pi <- umap.feature
+umap.feature <- Reduce( `+`, pi ) +
+      patchwork::plot_layout(ncol = 5)
+
+#save umap of protein expression of all samples
+pdf(paste0(work.dir, "/multimodal.umap.pdf"),20,15)
+umap.feature
+dev.off()
+
+#boxplots of ADT markers of EL vs controls
+p1 <- VlnPlot(pbmc.necs, features = protein.markers, assay = "ADT", slot = "data", same.y.lims = T, group.by = "age.group", combine = F)
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+age.group.col <- c(cbPalette[6], cbPalette[8])
+
+lapply(1:length(p1), function(x) {
+  dat <- p1[[x]]$data
+  p2 <- ggplot2::ggplot(dat, aes(ident, dat[,1])) + 
+    geom_boxplot(aes(fill = ident)) +
+    theme_classic(base_size = 20) +
+    scale_fill_manual(values = age.group.col) +
+    ylab("Expression Level") + xlab("age group") + ggtitle(colnames(dat)[1])
+}
+)
+
+Idents(pbmc.necs) <- "age.group"
+pbmc.CT <- subset(pbmc.necs, idents = "CT")
+protein.markers <- c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A","CD274","PDCD1")
+pbmc.CT$ct.consensus <- factor(pbmc.CT$ct.consensus, levels = rev(cell.types))
+
+p1 <- DotPlot(pbmc.CT, features = protein.markers, group.by = "ct.consensus", cols = c("#f0f0f0",  "#7F0000"), col.min = 0 )  + scale_size(limits = c(0,100), range = c(1,6)) 
+
+pdf(paste0(work.dir, "/DotPlot.Protein.CT.pdf"),15,8)
+p1
+dev.off()
+
+Idents(pbmc.necs) <- "age.group"
+pbmc.EL <- subset(pbmc.necs, idents = "EL")
+pbmc.EL$ct.consensus <- factor(pbmc.EL$ct.consensus, levels = rev(cell.types))
+
+
+p2 <- DotPlot(pbmc.EL, features = protein.markers, group.by = "ct.consensus", cols = c("#f0f0f0",  "#7F0000"), col.min = 0) + scale_size(limits = c(0,100), range = c(1,6)) 
+
+pdf(paste0(work.dir, "/DotPlot.Protein.EL.pdf"),15,8)
+p2
+dev.off()
+```
+
+
+CD274 and PDCD1
+```{r, eval = F, echo = F}
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+age.group.col <- c(cbPalette[6], cbPalette[8])
+
+p1 <- VlnPlot(pbmc.necs, features = "PDCD1", group.by = "age.group", split.by = "ct.consensus", assay = "ADT", slot = "data") 
+require(ggpubr)
+cyt.T <- c("CD4 T Cytotoxic", "CD8 T", "T gamma delta")
+p1 <- lapply(1:length(cyt.T), function(x){ggplot(p1$data[p1$data$split == cyt.T[x],], aes(ident,PDCD1, fill = ident))+ geom_boxplot() + facet_wrap(~split) +  scale_fill_manual(values = age.group.col) + theme_classic(base_size = 20) + stat_compare_means(method = "t.test")  
+})
+
+
+PDCD1.exp <- Reduce( `+`, p1 ) +
+      patchwork::plot_layout(ncol = 3)
+
+pdf(paste0(work.dir, "/Boxplot.CytT.PDCD1.pdf"),20,6)
+PDCD1.exp
+dev.off()
+
+```
+
+CITE-seq FACS-like Density Plots
+```{r, eval = F, echo = F}
+p1 <- FeatureScatter(pbmc.necs, "CD19", "CD3D", group.by = "ct.consensus", slot = "scale.data")
+
+et_density <- function(x, y, ...) {
+    dens <- MASS::kde2d(x, y, ...)
+    ix <- findInterval(x, dens$x)
+    iy <- findInterval(y, dens$y)
+    ii <- cbind(ix, iy)
+    return(dens$z[ii])
+}
+# tic()
+d <- et_density(p1$data$CD19, p1$data$CD3D)
+p1$data$density <- d
+
+ggplot(p1$data, aes(CD19, CD3D, color = density)) +
+        geom_point(size = 1) +
+        scale_color_gradientn(colours = rev(brewer.pal(11, "Spectral")),
+            trans = "sqrt") +
+        theme_classic()
+#Gating cells
+cells.locate <- CellSelector(p1)
+length(cells.locate)/ncol(pbmc.necs)
+#Selecting T cells: 0.5225247 52%
+#Selecting B cells: 0.02485903 2.5%
+
+p2 <- FeatureScatter(pbmc.necs, "CD8A", "CD4", cells = cells.locate, group.by = "ct.consensus", slot = "scale.data")
+
+d <- et_density(p2$data$CD8A, p2$data$CD4)
+p2$data$density <- d
+
+ggplot(p2$data, aes(CD8A, CD4, color = density)) +
+        geom_point(size = 1) +
+        scale_color_gradientn(colours = rev(brewer.pal(11, "Spectral")),
+            trans = "sqrt") +
+        theme_classic()
+
+#Gating cells
+CD4cells.locate <- CellSelector(p2)
+length(CD4cells.locate)/length(cells.locate) 
+#CD4 T cells: 0.5378278
+CD8cells.locate <- CellSelector(p2)
+length(CD8cells.locate)/length(cells.locate) 
+#CD8 T cells: 0.3412625
+```

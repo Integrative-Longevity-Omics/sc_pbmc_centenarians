@@ -1,0 +1,246 @@
+---
+title: "Single cell analysis of CITE-seq data of centenarians from NECS Study: Integrating batches and identifying main cell types"
+author: "Tanya Karagiannis, Stefano Monti, Paola Sebastiani"
+output:
+  html_document:
+    theme: united
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+```{r}
+knitr::opts_chunk$set(fig.width=12, fig.height=8) 
+
+```
+
+# Purpose: Identify main cell types based on protein expression
+- Integrate Batch1 and Batch2 of NECS cohort
+- Identify main cell types based on 10 protein markers
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(useful)
+library(cowplot)
+library(SummarizedExperiment)
+library(SingleR)
+library(BiocParallel)
+library(harmony, lib.loc = "/restricted/projectnb/montilab-p/R_pkgs/CentOS7/R_4.0.0/")
+
+work.dir <- "/restricted/projectnb/montilab-p/projects/longevity/scCentenarians/scCentenarians/NECS_Analysis/"
+
+Batch1 <- readRDS(file = paste0(work.dir, "Batch1/pbmc.cohort.Batch1.rds"))
+DefaultAssay(Batch1) <- "RNA"
+
+Batch2 <- readRDS(file = paste0(work.dir, "Batch2/pbmc.cohort.batch2.rds"))
+
+```
+
+## Change gene format
+```{r}
+Batch1.dat <- GetAssay(Batch1)
+Batch1.counts <- Batch1.dat@counts
+Batch1.log <- Batch1.dat@data
+rownames(Batch1.counts) <- make.names(rownames(Batch1.counts))
+rownames(Batch1.log) <- make.names(rownames(Batch1.log))
+
+Batch1[['RNA']]@counts <- Batch1.counts
+Batch1[['RNA']]@data <- Batch1.log
+
+Batch2.dat <- GetAssay(Batch2)
+Batch2.counts <- Batch2.dat@counts
+Batch2.log <- Batch2.dat@data
+rownames(Batch2.counts) <- make.names(rownames(Batch2.counts))
+rownames(Batch2.log) <- make.names(rownames(Batch2.log))
+
+Batch2[['RNA']]@counts <- Batch2.counts
+Batch2[['RNA']]@data <- Batch2.log
+
+
+```
+
+## Merge samples, normalization, and metadata
+```{r}
+pbmc.necs <- merge(Batch1, Batch2, add.cell.ids = c("B1", "B2"), project = "GMcohort.combine") %>%
+    Seurat::NormalizeData(verbose = FALSE) %>%
+    FindVariableFeatures(selection.method = "vst", nfeatures = 2000) 
+    #Seurat::SCTransform(vars.to.regress = c("batch", "percent.mt"), verbose = FALSE)
+
+head(pbmc.necs@meta.data)
+
+meta.data <- pbmc.necs@meta.data[,c("orig.ident","nCount_RNA","nFeature_RNA","nCount_ADT","nFeature_ADT","sample.ID","age.group","age","sex","percent.mt","batch", "ct.consensus")]
+
+pbmc.necs@meta.data <- meta.data
+
+pbmc.necs@meta.data$batch <- c(rep("COHORT.B1", nrow(Batch1@meta.data)), rep("COHORT.B2", nrow(Batch2@meta.data)))
+pbmc.necs <- ScaleData(pbmc.necs, vars.to.regress = "percent.mt")
+```
+
+## PCA Analysis
+```{r}
+pbmc.necs <- pbmc.necs %>% RunPCA(features = VariableFeatures(pbmc.necs), npcs = 50, verbose = FALSE)
+p1 <- DimPlot(object = pbmc.necs, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = pbmc.necs, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+
+```
+
+## Batch correction of samples in PCA space 
+- Harmony (Korunsky et al 2019 Nature Methods)
+```{r harmony correction}
+pbmc.necs <- pbmc.necs %>% 
+    RunHarmony(group.by.vars ="batch", plot_convergence = TRUE)
+
+#saveRDS(pbmc.necs, file = "./pbmc.necs.rds")
+
+p1 <- DimPlot(object = pbmc.necs, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = pbmc.necs, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+
+```
+
+## Run UMAP and clustering based on top 20 Harmony-corrected PCs
+```{r harmony umap}
+set.seed(822)
+pbmc.necs <- pbmc.necs %>% 
+    RunUMAP(reduction = "harmony", dims = 1:20) %>%
+    FindNeighbors(reduction = "harmony", dims = 1:20) %>% 
+    FindClusters(resolution = 0.8) %>% 
+    identity()
+```
+
+## Visualize UMAP and clusters
+```{r}
+p1 <- DimPlot(object = pbmc.necs, reduction = "umap", pt.size = .1, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(object = pbmc.necs, reduction = "umap", pt.size = .1, group.by = "batch")
+plot_grid(p1,p2)
+```
+
+## Protein expression levels to identify main cell types
+- 10 protein markers
+- normalize and scale protein expression data
+```{r}
+DefaultAssay(pbmc.necs) <- "ADT"
+pbmc.necs <- NormalizeData(pbmc.necs, assay = "ADT", normalization.method = "CLR") %>%
+  ScaleData(assay = "ADT")
+```
+
+## Expression of proteins per cluster
+```{r}
+Res <- cbind.data.frame(as.matrix(pbmc.necs$seurat_clusters), t(as.matrix(pbmc.necs[['ADT']]@data)))
+colnames(Res)[1] <- "clusters"
+ResFlat <- reshape2::melt(Res)
+colnames(ResFlat) <- c("clusters","protein.markers", "expression")
+
+ResFlat$protein.markers <- factor(ResFlat$protein.markers, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"))
+ResFlat$clusters <- factor(ResFlat$clusters, levels = 0:17)
+
+ggplot2::ggplot(ResFlat, aes(
+  x = protein.markers, y = expression,
+  fill = protein.markers)) +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~clusters, scales="fixed") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+## Select main cell types based on protein levels
+```{r}
+#CD4 T: Cluster 2, 3, 16
+#CD8 T: Cluster 1, 6, 12 
+#CD4 + CD8 T Mix: Cluster 7
+#NK cells: Cluster 0, 10
+#B cells: Cluster 8
+#CD14 Mono: Cluster 4, 5, 9, 15
+#CD16 Mono: Cluster 11
+#Myeloid: 13
+#CD4 Pos Myeloid (pDC): 17
+#CD274+: 14
+
+#Set main cell types based on protein expression of the 10 cell surface markers for each cluster
+Idents(pbmc.necs) <- "seurat_clusters"
+new.cluster.ids <- c("NK","CD8 T", "CD4 T", "CD4 T", "M14", "M14", "CD8 T", "CD4 + CD8 T", "B", "M14","NK","M16","CD8 T","Myeloid", "CD274+","M14", "CD4 T","CD4+ Myeloid")
+#new.cluster.ids <- c("CD8 T","NK", "M14", "CD4 T", "CD4 T", "M14", "CD4 T", "CD8 T", "CD4 T Cytotoxic", "B","M14","NK","M16","T gamma delta", "CD4 T","Myeloid", "Myeloid","M14","CD4 T","CD4 pos")
+
+
+names(new.cluster.ids) <- levels(pbmc.necs)
+pbmc.necs <- RenameIdents(pbmc.necs, new.cluster.ids)
+pbmc.necs$ADT.cell.types <- Idents(pbmc.necs)
+
+#saveRDS(pbmc.necs, file = paste0(work.dir, "Data/pbmc.necs.rds"))
+```
+
+## Visualize UMAP based on ADT-based cell types and batch
+```{r}
+p1 <- DimPlot(object = pbmc.necs, reduction = "umap", pt.size = .1, group.by = "ADT.cell.types", label = TRUE)
+p2 <- DimPlot(object = pbmc.necs, reduction = "umap", pt.size = .1, group.by = "batch")
+plot_grid(p1,p2)
+```
+
+
+
+# SingleR Analysis 
+Comparison of main cell types from public available datasets with protein-based main cell types in NECS dataset
+
+## Load public datasets and NECS data
+```{r, eval = F}
+pbmc.natgen <- readRDS("/restricted/projectnb/montilab-p/projects/longevity/scCentenarians/scCentenarians/PublicData_Reanalysis/natgen2018/data/natgen2018.rds")
+pbmc.pnas <- readRDS("/restricted/projectnb/montilab-p/projects/longevity/scCentenarians/scCentenarians/PublicData_Reanalysis/pnas2019/data/pnas2019.rds")
+pbmc.necs <- readRDS("/restricted/projectnb/montilab-p/projects/longevity/scCentenarian/NECS_Analysis/Data/pbmc.necs.updated.rds")
+DefaultAssay(pbmc.necs) <- "RNA"
+
+pbmc.natgen <- SummarizedExperiment(assays=list(logcounts=pbmc.natgen[['RNA']]@data), colData=pbmc.natgen@meta.data)
+pbmc.pnas <- SummarizedExperiment(assays=list(logcounts=pbmc.pnas[['RNA']]@data), colData=pbmc.pnas@meta.data)
+pbmc.necs <- SummarizedExperiment(assays=list(logcounts=pbmc.necs[['RNA']]@data), colData=pbmc.necs@meta.data)
+
+```
+
+## SingleR classification with DE genes (one vs all result)
+```{r, eval = F}
+class.res <- SingleR(test = pbmc.necs,
+    ref = list(natgen=pbmc.natgen, pnas=pbmc.pnas), 
+    labels = list(pbmc.natgen$ct.consensus, pbmc.pnas$ct.consensus),
+    method = "cluster",
+    clusters = pbmc.necs$seurat_clusters)
+    #BPPARAM = MulticoreParam(workers=8))
+
+#saveRDS(class.res, file = "Data/class.res.rds")
+
+table(class.res$labels)
+table(class.res$reference)  
+
+```
+
+## Visualize comparison with protein-based cell types identified
+```{r, eval = F}
+plotScoreHeatmap(class.res)
+Idents(pbmc.necs) <- "seurat_clusters"
+new.cluster.ids <- class.res$labels
+names(new.cluster.ids) <- levels(pbmc.necs)
+pbmc.necs <- RenameIdents(pbmc.necs, new.cluster.ids)
+pbmc.necs$singleR.labels <- Idents(pbmc.necs)
+knitr::kable(table(pbmc.necs$ADT.cell.types, pbmc.necs$singleR.labels))
+
+set.mat <- table(pbmc.necs$ADT.cell.types, pbmc.necs$singleR.labels)
+set.mat
+
+#98.8% accuracy in detection
+# library(caret) 
+# confusionMatrix(set.mat)
+
+p1 <- DimPlot(pbmc.necs, group.by = "ADT.cell.types")
+p2 <- DimPlot(pbmc.necs, group.by = "singleR.labels")
+plot_grid(p1, p2)
+
+#saveRDS(pbmc.necs, file = paste0(work.dir,"Data/pbmc.necs.rds"))
+```
+
+
+
+
+
+
+
+
+

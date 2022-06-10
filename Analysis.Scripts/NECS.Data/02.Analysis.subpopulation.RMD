@@ -1,0 +1,1388 @@
+---
+title: "Single cell analysis of CITE-seq data of centenarians from NECS Study: Identifying subtypes"
+author: "Tanya Karagiannis, Stefano Monti, Paola Sebastiani"
+output:
+  html_document:
+    theme: united
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+```{r}
+knitr::opts_chunk$set(fig.width=12, fig.height=8) 
+
+```
+
+# Purpose: Identify subtypes
+- Subset and cluster main cell types
+- Identify subtypes based on protein expression and immune cell type transcriptional signatures
+
+Load genesets and boxplot function
+```{r}
+source("/rprojectnb2/montilab-p/personal/tanya/functions/vlnplot.functions.R")
+immune.genesets <- readRDS("/rprojectnb2/montilab-p/personal/tanya/functions/genesets/immune.genesets.rds")
+```
+
+Load libraries and data
+```{r}
+library(dplyr)
+library(Seurat)
+library(Matrix)
+library(harmony, lib.loc = "/restricted/projectnb/montilab-p/R_pkgs/CentOS7/R_4.0.0/")
+library(Seurat)
+library(ggplot2)
+library(cowplot)
+
+work.dir <- "/restricted/projectnb/montilab-p/projects/longevity/scCentenarians/scCentenarians/NECS_Analysis/"
+
+pbmc.necs <- readRDS(paste0(work.dir,"Data/pbmc.necs.rds"))
+DefaultAssay(pbmc.necs) <- "RNA" #set default assay to RNA expression
+```
+
+# Subset main cell types
+```{r}
+Idents(pbmc.necs) <- "ADT.cell.types"
+#subset population
+CD4T <- subset(pbmc.necs, idents = c("CD4 T"))
+CD8T <- subset(pbmc.necs, idents = c("CD8 T"))
+CD4CD8T <- subset(pbmc.necs, idents = c("CD4 + CD8 T"))
+NK <- subset(pbmc.necs, idents = c("NK"))
+Bcells <- subset(pbmc.necs, idents = c("B"))
+Myeloid <- subset(pbmc.necs, idents = c("Myeloid","CD4+ Myeloid", "CD274+"))
+M14 <- subset(pbmc.necs, idents = c("M14"))
+M16 <- subset(pbmc.necs, idents = c("M16"))
+```
+
+# Set seed for reproducability
+```{r}
+set.seed(152)
+```
+
+# CD4 T cells: PCA, Clustering, and expression of immune cell type signatures
+
+## Scaling data and PCA
+```{r}
+CD4T <-  FindVariableFeatures(CD4T, selection.method = "vst", nfeatures = 2000) %>%
+  ScaleData(features = row.names(CD4T))
+
+CD4T <- RunPCA(CD4T, features = VariableFeatures(CD4T))
+p1 <- DimPlot(object = CD4T, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = CD4T, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+```
+
+## Batch Correction with Harmony
+```{r}
+CD4T <- CD4T %>% RunHarmony(group.by.vars ="batch", plot_convergence = TRUE)
+
+p1 <- DimPlot(object = CD4T, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = CD4T, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+#ElbowPlot(object = CD4T, ndims = 20, reduction = "harmony")
+```
+
+## Clustering and UMAP
+```{r}
+CD4T <- CD4T %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = 0.8) %>%
+  RunUMAP(reduction = "harmony", dims = 1:10)
+
+p1 <- DimPlot(CD4T, reduction = "umap", pt.size = 0.8, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(CD4T, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+```
+
+## Protein marker expression
+```{r}
+
+Res <- cbind.data.frame(as.matrix(CD4T$seurat_clusters), t(as.matrix(CD4T[['ADT']]@data)))
+colnames(Res)[1] <- "clusters"
+ResFlat <- reshape2::melt(Res)
+colnames(ResFlat) <- c("clusters","protein.markers", "expression")
+
+ResFlat$protein.markers <- factor(ResFlat$protein.markers, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"))
+ResFlat$clusters <- factor(ResFlat$clusters, levels = 0:17)
+
+protein.plot <- ggplot2::ggplot(ResFlat, aes(
+  x = protein.markers, y = expression,
+  fill = protein.markers)) +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~clusters, scales="fixed") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+protein.plot
+
+DotPlot(CD4T, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "ADT") + RotatedAxis()
+
+DotPlot(CD4T, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "RNA") + RotatedAxis()
+```
+
+
+## Average Scaled Expression of immune cell type signatures
+```{r}
+ct.interest <- c("T cells CD4 naive", "T cells CD4 memory", "T cells CD8","T cells gamma delta")
+#ct.interest <- c("T cells CD4 naive", "T cells CD4 memory")
+CD4Memory.sig <- list("T cells CD4 memory" = unique(do.call(c,immune.genesets[c("T cells CD4 memory resting", "T cells CD4 memory activated")])))
+immune.genesets <- c(immune.genesets, CD4Memory.sig)
+
+CD4T1 <- AddModuleScore(CD4T, features = immune.genesets[ct.interest], name = ct.interest, search = T)
+
+cell.types <- levels(CD4T1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(CD4T1) <- "seurat_clusters"
+  CD4T1 <- subset(CD4T1, idents = c(cell.types[x]))
+  group <- CD4T1$seurat_clusters
+  meta.data <- abs(CD4T1@meta.data[c(16:19)])
+  plot.sets <- vlnplot(CD4T1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+plot.sets
+```
+
+## Average expression of gene markers 
+```{r}
+canonical.genes <-  c("CD3D", "CD3G", "TRAC", #tcell
+                      "CD8A","CD8B","TRDC",#cd8 and tdeltagamma
+                      "GNLY", "NKG7", #nk cells
+                      "CCR7","SELL","LEF1","TCF7", # Noncytotoxic
+                      "CREM", #activated, effector
+                      "GZMH","GZMB","GZMA","PRF1", #cytotoxic
+                      "CD19", "CD79A", "MS4A1", #bcells
+                      "CD14","FCGR3A","S100A8", "S100A12", #monocytes
+                      "PPBP", "GNG11", #megakaryocytes
+                      "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                      "IGJ", "MZB1", #plasma cells
+                      "HBA1","HBA2", "HBB", #erythrocytes
+                      "MKI67","CDK1" )#MKI 
+
+
+Idents(CD4T) <- "seurat_clusters"
+DotPlot(CD4T, cols =,features = canonical.genes
+) + RotatedAxis()
+```
+
+## Identified subtypes
+```{r}
+#CD4 Memory: 0, 1, 7, 8, 9, 10 
+#CD4 Naive: 2, 3, 4
+#CD8: 6
+#CD4+CD8: 5
+
+Idents(CD4T) <- "seurat_clusters"
+new.cluster.ids <- c("CD4 T Memory", "CD4 T Memory", "CD4 T Naive","CD4 T Naive", "CD4 T Naive", "CD4 + CD8 T",
+                     "CD8 T", "CD4 T Memory","CD4 T Memory", "CD4 T Memory", "CD4 T Memory")
+
+names(new.cluster.ids) <- levels(CD4T)
+CD4T <- RenameIdents(CD4T, new.cluster.ids)
+
+CD4T$ct.consensus <- Idents(CD4T)
+
+p1 <- DimPlot(CD4T, reduction = "umap", pt.size = 0.8, group.by = "ct.consensus", label = TRUE)
+p2 <- DimPlot(CD4T, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+
+#saveRDS(CD4T, file = paste0(work.dir, "Data/CD4T.rds"))
+```
+
+# Check subtypes identified using immune signatures
+```{r}
+CD4T1 <- AddModuleScore(CD4T, features = immune.genesets[ct.interest], name = ct.interest, search = T)
+
+cell.types <- levels(CD4T1$ct.consensus)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(CD4T1) <- "ct.consensus"
+  CD4T1 <- subset(CD4T1, idents = c(cell.types[x]))
+  group <- CD4T1$ct.consensus
+  meta.data <- abs(CD4T1@meta.data[c(16:19)])
+  plot.sets <- vlnplot(CD4T1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+plot.sets
+```
+
+## Subset CD4 T cells for CD4+ and CD8+ mix: PCA, Clustering, and expression of immune cell type signatures
+
+### Scaling data and PCA
+```{r}
+CD4.CD8.mix <- subset(CD4T, idents = "CD4 + CD8 T")
+CD4.CD8.mix <-  FindVariableFeatures(CD4.CD8.mix, selection.method = "vst", nfeatures = 2000) %>%
+  ScaleData(features = row.names(CD4.CD8.mix))
+
+CD4.CD8.mix <- RunPCA(CD4.CD8.mix, features = VariableFeatures(CD4.CD8.mix))
+p1 <- DimPlot(object = CD4.CD8.mix, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = CD4.CD8.mix, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+```
+
+### Batch Correction with Harmony
+```{r}
+CD4.CD8.mix <- CD4.CD8.mix %>% RunHarmony(group.by.vars ="batch", plot_convergence = TRUE)
+
+p1 <- DimPlot(object = CD4.CD8.mix, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = CD4.CD8.mix, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+ElbowPlot(object = CD4.CD8.mix, ndims = 20, reduction = "harmony")
+```
+
+### Clustering and UMAP
+```{r}
+CD4.CD8.mix <- CD4.CD8.mix %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = 0.8) %>%
+  RunUMAP(reduction = "harmony", dims = 1:10)
+
+p1 <- DimPlot(CD4.CD8.mix, reduction = "umap", pt.size = 0.8, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(CD4.CD8.mix, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+```
+
+### Protein marker expression
+```{r}
+Res <- cbind.data.frame(as.matrix(CD4.CD8.mix$seurat_clusters), t(as.matrix(CD4.CD8.mix[['ADT']]@data)))
+colnames(Res)[1] <- "clusters"
+ResFlat <- reshape2::melt(Res)
+colnames(ResFlat) <- c("clusters","protein.markers", "expression")
+
+ResFlat$protein.markers <- factor(ResFlat$protein.markers, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"))
+ResFlat$clusters <- factor(ResFlat$clusters, levels = 0:17)
+
+protein.plot <- ggplot2::ggplot(ResFlat, aes(
+  x = protein.markers, y = expression,
+  fill = protein.markers)) +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~clusters, scales="fixed") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+protein.plot
+
+DotPlot(CD4.CD8.mix, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "ADT") + RotatedAxis()
+
+DotPlot(CD4.CD8.mix, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "RNA") + RotatedAxis()
+```
+
+### Average Scaled Expression of immune cell type signatures
+```{r}
+ct.interest <- c("T cells CD4 naive", "T cells CD4 memory", "T cells CD8")
+CD4Memory.sig <- list("T cells CD4 memory" = unique(do.call(c,immune.genesets[c("T cells CD4 memory resting", "T cells CD4 memory activated")])))
+immune.genesets <- c(immune.genesets, CD4Memory.sig)
+
+CD4.CD8.mix1 <- AddModuleScore(CD4.CD8.mix, features = immune.genesets[ct.interest], name = ct.interest, search = T)
+
+cell.types <- levels(CD4.CD8.mix1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(CD4.CD8.mix1) <- "seurat_clusters"
+  CD4.CD8.mix1 <- subset(CD4.CD8.mix1, idents = c(cell.types[x]))
+  group <- CD4.CD8.mix1$seurat_clusters
+  meta.data <- abs(CD4.CD8.mix1@meta.data[c(16:18)])
+  plot.sets <- vlnplot(CD4.CD8.mix1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+```
+
+### Average expression of gene markers 
+```{r}
+canonical.genes <-  c("CD3D", "CD3G", "TRAC", #tcell
+                      "CD8A","CD8B","TRDC",#cd8 and tdeltagamma
+                      "GNLY", "NKG7", #nk cells
+                      "CCR7","SELL","LEF1","TCF7", # Noncytotoxic
+                      "CREM", #activated, effector
+                      "GZMH","GZMB","GZMA","PRF1", #cytotoxic
+                      "CD19", "CD79A", "MS4A1", #bcells
+                      "CD14","FCGR3A","S100A8", "S100A12", #monocytes
+                      "PPBP", "GNG11", #megakaryocytes
+                      "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                      "IGJ", "MZB1", #plasma cells
+                      "HBA1","HBA2", "HBB", #erythrocytes
+                      "MKI67","CDK1" )#MKI 
+
+
+Idents(CD4.CD8.mix) <- "seurat_clusters"
+DotPlot(CD4.CD8.mix, cols =,features = canonical.genes
+) + RotatedAxis()
+```
+
+### Identification based on Cell types
+```{r}
+#CD4 Memory: 0, 1, 3, 4
+#CD8 T: 2
+
+Idents(CD4.CD8.mix) <- "seurat_clusters"
+new.cluster.ids <- c("CD4 T Memory", "CD4 T Memory", "CD8 T","CD4 T Memory", "CD4 T Memory")
+
+names(new.cluster.ids) <- levels(CD4.CD8.mix)
+CD4.CD8.mix <- RenameIdents(CD4.CD8.mix, new.cluster.ids)
+
+CD4.CD8.mix$ct.consensus <- Idents(CD4.CD8.mix)
+
+p1 <- DimPlot(CD4.CD8.mix, reduction = "umap", pt.size = 0.8, group.by = "ct.consensus", label = TRUE)
+p2 <- DimPlot(CD4.CD8.mix, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+
+CD4Tsubset.CD4CD8mix <- CD4.CD8.mix
+#saveRDS(CD4.CD8.mix, file = paste0(work.dir, "Data/CD4Tsubset.CD4CD8mix.rds"))
+```
+
+### Check subtypes identified using immune signatures
+```{r}
+CD4.CD8.mix1 <- AddModuleScore(CD4.CD8.mix, features = immune.genesets[ct.interest], name = ct.interest, search = T)
+
+cell.types <- levels(CD4.CD8.mix1$ct.consensus)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(CD4.CD8.mix1) <- "ct.consensus"
+  CD4.CD8.mix1 <- subset(CD4.CD8.mix1, idents = c(cell.types[x]))
+  group <- CD4.CD8.mix1$ct.consensus
+  meta.data <- abs(CD4.CD8.mix1@meta.data[c(16:18)])
+  plot.sets <- vlnplot(CD4.CD8.mix1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+plot.sets
+```
+
+# CD8 T cells: PCA, Clustering, and expression of immune cell type signatures
+
+## Scaling data and PCA
+```{r}
+CD8T <-  FindVariableFeatures(CD8T, selection.method = "vst", nfeatures = 2000) %>%
+  ScaleData(features = row.names(CD8T))
+
+CD8T <- RunPCA(CD8T, features = VariableFeatures(CD8T))
+p1 <- DimPlot(object = CD8T, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = CD8T, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+```
+
+## Batch Correction with Harmony
+```{r}
+CD8T <- CD8T %>% RunHarmony(group.by.vars ="batch", plot_convergence = TRUE)
+
+p1 <- DimPlot(object = CD8T, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = CD8T, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+#ElbowPlot(object = CD8T, ndims = 20, reduction = "harmony")
+```
+
+## Clustering and UMAP
+```{r}
+CD8T <- CD8T %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = 0.8) %>%
+  RunUMAP(reduction = "harmony", dims = 1:10)
+
+p1 <- DimPlot(CD8T, reduction = "umap", pt.size = 0.8, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(CD8T, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+```
+
+## Protein marker expression
+```{r}
+Res <- cbind.data.frame(as.matrix(CD8T$seurat_clusters), t(as.matrix(CD8T[['ADT']]@data)))
+colnames(Res)[1] <- "clusters"
+ResFlat <- reshape2::melt(Res)
+colnames(ResFlat) <- c("clusters","protein.markers", "expression")
+
+ResFlat$protein.markers <- factor(ResFlat$protein.markers, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"))
+ResFlat$clusters <- factor(ResFlat$clusters, levels = 0:17)
+
+protein.plot <- ggplot2::ggplot(ResFlat, aes(
+  x = protein.markers, y = expression,
+  fill = protein.markers)) +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~clusters, scales="fixed") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+protein.plot
+
+DotPlot(CD8T, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "ADT") + RotatedAxis()
+
+DotPlot(CD8T, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "RNA") + RotatedAxis()
+```
+
+## Average Scaled Expression of immune cell type signatures
+```{r}
+ct.interest <- c("T cells CD4 naive", "T cells CD4 memory", "T cells CD8","T cells gamma delta", "NK cells")
+CD4Memory.sig <- list("T cells CD4 memory" = unique(do.call(c,immune.genesets[c("T cells CD4 memory resting", "T cells CD4 memory activated")])))
+NK.sig <- list("NK cells" = unique(do.call(c,immune.genesets[c("NK cells resting", "NK cells activated")])))
+immune.genesets <- c(immune.genesets, CD4Memory.sig, NK.sig)
+
+CD8T1 <- AddModuleScore(CD8T, features = immune.genesets[ct.interest], name = ct.interest, search = T)
+
+cell.types <- levels(CD8T1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(CD8T1) <- "seurat_clusters"
+  CD8T1 <- subset(CD8T1, idents = c(cell.types[x]))
+  group <- CD8T1$seurat_clusters
+  meta.data <- abs(CD8T1@meta.data[c(16:20)])
+  plot.sets <- vlnplot(CD8T1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+plot.sets
+```
+
+## Average expression of gene markers 
+```{r}
+canonical.genes <-  c("CD3D", "CD3G", "TRAC", #tcell
+                      "CD8A","CD8B","TRDC",#cd8 and tdeltagamma
+                      "GNLY", "NKG7", #nk cells
+                      "CCR7","SELL","LEF1","TCF7", # Noncytotoxic
+                      "CREM", #activated, effector
+                      "GZMH","GZMB","GZMA","PRF1", #cytotoxic
+                      "CD19", "CD79A", "MS4A1", #bcells
+                      "CD14","FCGR3A","S100A8", "S100A12", #monocytes
+                      "PPBP", "GNG11", #megakaryocytes
+                      "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                      "IGJ", "MZB1", #plasma cells
+                      "HBA1","HBA2", "HBB", #erythrocytes
+                      "MKI67","CDK1" )#MKI 
+
+
+Idents(CD8T) <- "seurat_clusters"
+DotPlot(CD8T, cols =,features = canonical.genes
+) + RotatedAxis()
+```
+
+## Identification based on Cell types
+```{r}
+#CD4+CD8: 4, 5
+#CD8: 0,1,2,3,6,7,9,10,11
+#CD8+NK: 8
+Idents(CD8T) <- "seurat_clusters"
+new.cluster.ids <- c("CD8 T", "CD8 T", "CD8 T","CD8 T", "CD4 + CD8 T", "CD4 + CD8 T",
+                     "CD8 T", "CD8 T","NK + CD8 T", "CD8 T", "CD8 T", "CD8 T")
+
+names(new.cluster.ids) <- levels(CD8T)
+CD8T <- RenameIdents(CD8T, new.cluster.ids)
+
+CD8T$ct.consensus <- Idents(CD8T)
+
+p1 <- DimPlot(CD8T, reduction = "umap", pt.size = 0.8, group.by = "ct.consensus", label = TRUE)
+p2 <- DimPlot(CD8T, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+
+#saveRDS(CD8T, file = paste0(work.dir, "Data/CD8T.rds"))
+```
+
+## Check subtypes identified using immune signatures
+```{r}
+CD8T1 <- AddModuleScore(CD8T, features = immune.genesets[ct.interest], name = ct.interest, search = T)
+
+cell.types <- levels(CD8T1$ct.consensus)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(CD8T1) <- "ct.consensus"
+  CD8T1 <- subset(CD8T1, idents = c(cell.types[x]))
+  group <- CD8T1$ct.consensus
+  meta.data <- abs(CD8T1@meta.data[c(16:20)])
+  plot.sets <- vlnplot(CD8T1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+plot.sets
+```
+
+## Subset CD8 T cells for CD4+ and CD8+ mix: PCA, Clustering, and expression of immune cell type signatures
+### Scaling data and PCA
+```{r}
+CD8.CD4.mix <- subset(CD8T, idents = "CD4 + CD8 T")
+CD8.CD4.mix <-  FindVariableFeatures(CD8.CD4.mix, selection.method = "vst", nfeatures = 2000) %>%
+  ScaleData(features = row.names(CD8.CD4.mix))
+
+CD8.CD4.mix <- RunPCA(CD8.CD4.mix, features = VariableFeatures(CD8.CD4.mix))
+p1 <- DimPlot(object = CD8.CD4.mix, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = CD8.CD4.mix, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+```
+
+### Batch Correction with Harmony
+```{r}
+CD8.CD4.mix <- CD8.CD4.mix %>% RunHarmony(group.by.vars ="batch", plot_convergence = TRUE)
+
+p1 <- DimPlot(object = CD8.CD4.mix, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = CD8.CD4.mix, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+ElbowPlot(object = CD8.CD4.mix, ndims = 20, reduction = "harmony")
+```
+
+### Clustering and UMAP
+```{r}
+CD8.CD4.mix <- CD8.CD4.mix %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = 0.8) %>%
+  RunUMAP(reduction = "harmony", dims = 1:10)
+
+p1 <- DimPlot(CD8.CD4.mix, reduction = "umap", pt.size = 0.8, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(CD8.CD4.mix, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+```
+
+### Protein marker expression
+```{r}
+Res <- cbind.data.frame(as.matrix(CD8.CD4.mix$seurat_clusters), t(as.matrix(CD8.CD4.mix[['ADT']]@data)))
+colnames(Res)[1] <- "clusters"
+ResFlat <- reshape2::melt(Res)
+colnames(ResFlat) <- c("clusters","protein.markers", "expression")
+
+ResFlat$protein.markers <- factor(ResFlat$protein.markers, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"))
+ResFlat$clusters <- factor(ResFlat$clusters, levels = 0:17)
+
+protein.plot <- ggplot2::ggplot(ResFlat, aes(
+  x = protein.markers, y = expression,
+  fill = protein.markers)) +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~clusters, scales="fixed") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+protein.plot
+
+DotPlot(CD8.CD4.mix, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "ADT") + RotatedAxis()
+
+DotPlot(CD8.CD4.mix, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "RNA") + RotatedAxis()
+```
+
+### Average Scaled Expression of immune cell type signatures
+```{r}
+ct.interest <- c("T cells CD4 naive", "T cells CD4 memory", "T cells CD8","T cells gamma delta", "NK cells")
+CD4Memory.sig <- list("T cells CD4 memory" = unique(do.call(c,immune.genesets[c("T cells CD4 memory resting", "T cells CD4 memory activated")])))
+NK.sig <- list("NK cells" = unique(do.call(c,immune.genesets[c("NK cells resting", "NK cells activated")])))
+immune.genesets <- c(immune.genesets, CD4Memory.sig, NK.sig)
+
+CD8.CD4.mix1 <- AddModuleScore(CD8.CD4.mix, features = immune.genesets[ct.interest], name = ct.interest, search = T)
+
+cell.types <- levels(CD8.CD4.mix1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(CD8.CD4.mix1) <- "seurat_clusters"
+  CD8.CD4.mix1 <- subset(CD8.CD4.mix1, idents = c(cell.types[x]))
+  group <- CD8.CD4.mix1$seurat_clusters
+  meta.data <- abs(CD8.CD4.mix1@meta.data[c(16:20)])
+  plot.sets <- vlnplot(CD8.CD4.mix1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+plot.sets
+```
+
+# Average expression of gene markers 
+```{r}
+canonical.genes <-  c("CD3D", "CD3G", "TRAC", #tcell
+                      "CD8A","CD8B","TRDC",#cd8 and tdeltagamma
+                      "GNLY", "NKG7", #nk cells
+                      "CCR7","SELL","LEF1","TCF7", # Noncytotoxic
+                      "CREM", #activated, effector
+                      "GZMH","GZMB","GZMA","PRF1", #cytotoxic
+                      "CD19", "CD79A", "MS4A1", #bcells
+                      "CD14","FCGR3A","S100A8", "S100A12", #monocytes
+                      "PPBP", "GNG11", #megakaryocytes
+                      "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                      "IGJ", "MZB1", #plasma cells
+                      "HBA1","HBA2", "HBB", #erythrocytes
+                      "MKI67","CDK1" )#MKI 
+
+
+Idents(CD8.CD4.mix) <- "seurat_clusters"
+DotPlot(CD8.CD4.mix, cols =,features = canonical.genes
+) + RotatedAxis()
+```
+
+### Identification based on Cell types
+```{r}
+#CD4 T CD8 T mix: 1,2,3, 4
+#CD8 T: 0
+
+Idents(CD8.CD4.mix) <- "seurat_clusters"
+new.cluster.ids <- c("CD8 T", "CD4 T CD8 T", "CD4 T CD8 T", "CD4 T CD8 T","CD8 T")
+
+names(new.cluster.ids) <- levels(CD8.CD4.mix)
+CD8.CD4.mix <- RenameIdents(CD8.CD4.mix, new.cluster.ids)
+
+CD8.CD4.mix$ct.consensus <- Idents(CD8.CD4.mix)
+
+p1 <- DimPlot(CD8.CD4.mix, reduction = "umap", pt.size = 0.8, group.by = "ct.consensus", label = TRUE)
+p2 <- DimPlot(CD8.CD4.mix, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+
+CD8Tsubset.CD4CD8mix.V1 <- CD8.CD4.mix
+#saveRDS(CD8.CD4.mix, file = paste0(work.dir, "Data/CD8Tsubset.CD4CD8mix.V1.rds"))
+```
+
+### Check cell types based on immune signatures
+```{r}
+CD8.CD4.mix1 <- AddModuleScore(CD8.CD4.mix, features = immune.genesets[ct.interest], name = ct.interest, search = T)
+
+cell.types <- levels(CD8.CD4.mix1$ct.consensus)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(CD8.CD4.mix1) <- "ct.consensus"
+  CD8.CD4.mix1 <- subset(CD8.CD4.mix1, idents = c(cell.types[x]))
+  group <- CD8.CD4.mix1$ct.consensus
+  meta.data <- abs(CD8.CD4.mix1@meta.data[c(16:20)])
+  plot.sets <- vlnplot(CD8.CD4.mix1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+plot.sets
+```
+
+## Subset second group for CD8 T cells of CD4+ and CD8+ mix: PCA, Clustering, and expression of immune cell type signatures
+### Scaling data and PCA
+```{r}
+CD8.CD4.mix <- subset(CD8.CD4.mix, idents = "CD4 T CD8 T")
+CD8.CD4.mix <-  FindVariableFeatures(CD8.CD4.mix, selection.method = "vst", nfeatures = 2000) %>%
+  ScaleData(features = row.names(CD8.CD4.mix))
+
+CD8.CD4.mix <- RunPCA(CD8.CD4.mix, features = VariableFeatures(CD8.CD4.mix))
+p1 <- DimPlot(object = CD8.CD4.mix, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = CD8.CD4.mix, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+```
+
+### Batch Correction with Harmony
+```{r}
+CD8.CD4.mix <- CD8.CD4.mix %>% RunHarmony(group.by.vars ="batch", plot_convergence = TRUE)
+
+p1 <- DimPlot(object = CD8.CD4.mix, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = CD8.CD4.mix, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+#ElbowPlot(object = CD8.CD4.mix, ndims = 20, reduction = "harmony")
+```
+
+### Clustering and UMAP
+```{r}
+CD8.CD4.mix <- CD8.CD4.mix %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = 0.8) %>%
+  RunUMAP(reduction = "harmony", dims = 1:10)
+
+p1 <- DimPlot(CD8.CD4.mix, reduction = "umap", pt.size = 0.8, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(CD8.CD4.mix, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+```
+
+### Protein marker expression
+```{r}
+Res <- cbind.data.frame(as.matrix(CD8.CD4.mix$seurat_clusters), t(as.matrix(CD8.CD4.mix[['ADT']]@data)))
+colnames(Res)[1] <- "clusters"
+ResFlat <- reshape2::melt(Res)
+colnames(ResFlat) <- c("clusters","protein.markers", "expression")
+
+ResFlat$protein.markers <- factor(ResFlat$protein.markers, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"))
+ResFlat$clusters <- factor(ResFlat$clusters, levels = 0:17)
+
+protein.plot <- ggplot2::ggplot(ResFlat, aes(
+  x = protein.markers, y = expression,
+  fill = protein.markers)) +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~clusters, scales="fixed") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+protein.plot
+
+DotPlot(CD8.CD4.mix, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "ADT") + RotatedAxis()
+
+DotPlot(CD8.CD4.mix, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "RNA") + RotatedAxis()
+```
+
+### Average Scaled Expression of immune cell type signatures
+```{r}
+ct.interest <- c("T cells CD4 naive", "T cells CD4 memory", "T cells CD8","T cells gamma delta", "NK cells")
+CD4Memory.sig <- list("T cells CD4 memory" = unique(do.call(c,immune.genesets[c("T cells CD4 memory resting", "T cells CD4 memory activated")])))
+NK.sig <- list("NK cells" = unique(do.call(c,immune.genesets[c("NK cells resting", "NK cells activated")])))
+immune.genesets <- c(immune.genesets, CD4Memory.sig, NK.sig)
+
+CD8.CD4.mix1 <- AddModuleScore(CD8.CD4.mix, features = immune.genesets[ct.interest], name = ct.interest, search = T)
+
+cell.types <- levels(CD8.CD4.mix1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(CD8.CD4.mix1) <- "seurat_clusters"
+  CD8.CD4.mix1 <- subset(CD8.CD4.mix1, idents = c(cell.types[x]))
+  group <- CD8.CD4.mix1$seurat_clusters
+  meta.data <- abs(CD8.CD4.mix1@meta.data[c(16:20)])
+  plot.sets <- vlnplot(CD8.CD4.mix1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+plot.sets
+```
+
+### Average expression of gene markers 
+```{r}
+canonical.genes <-  c("CD3D", "CD3G", "TRAC", #tcell
+                      "CD8A","CD8B","TRDC",#cd8 and tdeltagamma
+                      "GNLY", "NKG7", #nk cells
+                      "CCR7","SELL","LEF1","TCF7", # Noncytotoxic
+                      "CREM", #activated, effector
+                      "GZMH","GZMB","GZMA","PRF1", #cytotoxic
+                      "CD19", "CD79A", "MS4A1", #bcells
+                      "CD14","FCGR3A","S100A8", "S100A12", #monocytes
+                      "PPBP", "GNG11", #megakaryocytes
+                      "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                      "IGJ", "MZB1", #plasma cells
+                      "HBA1","HBA2", "HBB", #erythrocytes
+                      "MKI67","CDK1" )#MKI 
+
+
+Idents(CD8.CD4.mix) <- "seurat_clusters"
+DotPlot(CD8.CD4.mix, cols =,features = canonical.genes
+) + RotatedAxis()
+```
+
+### Identification based on Cell types
+```{r}
+#CD4 T Cytotoxic: 0,1,2
+#CD8 T: 3
+
+Idents(CD8.CD4.mix) <- "seurat_clusters"
+new.cluster.ids <- c("CD4 T Cytotoxic", "CD4 T Cytotoxic", "CD4 T Cytotoxic", "CD8 T")
+
+names(new.cluster.ids) <- levels(CD8.CD4.mix)
+CD8.CD4.mix <- RenameIdents(CD8.CD4.mix, new.cluster.ids)
+
+CD8.CD4.mix$ct.consensus <- Idents(CD8.CD4.mix)
+
+p1 <- DimPlot(CD8.CD4.mix, reduction = "umap", pt.size = 0.8, group.by = "ct.consensus", label = TRUE)
+p2 <- DimPlot(CD8.CD4.mix, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+
+CD8Tsubset.CD4CD8mix.V2 <- CD8.CD4.mix
+#saveRDS(CD8.CD4.mix, file = paste0(work.dir, "Data/CD8Tsubset.CD4CD8mix.V2.rds"))
+```
+
+# CD4 CD8 T cells: PCA, Clustering, and expression of immune cell type signatures
+
+## Scaling data and PCA
+```{r}
+CD4CD8T <-  FindVariableFeatures(CD4CD8T, selection.method = "vst", nfeatures = 2000) %>%
+  ScaleData(features = row.names(CD4CD8T))
+
+CD4CD8T <- RunPCA(CD4CD8T, features = VariableFeatures(CD4CD8T))
+p1 <- DimPlot(object = CD4CD8T, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = CD4CD8T, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+```
+
+## Batch Correction with Harmony
+```{r}
+CD4CD8T <- CD4CD8T %>% RunHarmony(group.by.vars ="batch", plot_convergence = TRUE)
+
+p1 <- DimPlot(object = CD4CD8T, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = CD4CD8T, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+ElbowPlot(object = CD4CD8T, ndims = 20, reduction = "harmony")
+```
+
+## Clustering and UMAP
+```{r}
+CD4CD8T <- CD4CD8T %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = 0.8) %>%
+  RunUMAP(reduction = "harmony", dims = 1:10)
+
+p1 <- DimPlot(CD4CD8T, reduction = "umap", pt.size = 0.8, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(CD4CD8T, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+```
+
+## Protein marker expression
+```{r}
+Res <- cbind.data.frame(as.matrix(CD4CD8T$seurat_clusters), t(as.matrix(CD4CD8T[['ADT']]@data)))
+colnames(Res)[1] <- "clusters"
+ResFlat <- reshape2::melt(Res)
+colnames(ResFlat) <- c("clusters","protein.markers", "expression")
+
+ResFlat$protein.markers <- factor(ResFlat$protein.markers, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"))
+ResFlat$clusters <- factor(ResFlat$clusters, levels = 0:4)
+
+protein.plot <- ggplot2::ggplot(ResFlat, aes(
+  x = protein.markers, y = expression,
+  fill = protein.markers)) +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~clusters, scales="fixed") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+protein.plot
+
+DotPlot(CD4CD8T, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "ADT") + RotatedAxis()
+
+DotPlot(CD4CD8T, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "RNA") + RotatedAxis()
+```
+
+## Average Scaled Expression of immune cell type signatures
+```{r}
+ct.interest <- c("T cells CD4 naive", "T cells CD4 memory", "T cells CD8","T cells gamma delta")
+CD4Memory.sig <- list("T cells CD4 memory" = unique(do.call(c,immune.genesets[c("T cells CD4 memory resting", "T cells CD4 memory activated")])))
+NK.sig <- list("NK cells" = unique(do.call(c,immune.genesets[c("NK cells resting", "NK cells activated")])))
+immune.genesets <- c(immune.genesets, CD4Memory.sig, NK.sig)
+
+CD4CD8T1 <- AddModuleScore(CD4CD8T, features = immune.genesets[ct.interest], name = ct.interest, search = T)
+
+cell.types <- levels(CD4CD8T1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(CD4CD8T1) <- "seurat_clusters"
+  CD4CD8T1 <- subset(CD4CD8T1, idents = c(cell.types[x]))
+  group <- CD4CD8T1$seurat_clusters
+  meta.data <- abs(CD4CD8T1@meta.data[c(16:19)])
+  plot.sets <- vlnplot(CD4CD8T1, meta.data,group = group, cell.type = cell.types[x]) 
+  
+  return(plot.sets)
+})
+
+canonical.genes <-  c("CD3D", "CD3G", "TRAC", #tcell
+                      "CD8A","CD8B","TRDC",#cd8 and tdeltagamma
+                      "GNLY", "NKG7", #nk cells
+                      "CCR7","SELL","LEF1","TCF7", # Noncytotoxic
+                      "CREM", #activated, effector
+                      "GZMH","GZMB","GZMA","PRF1", #cytotoxic
+                      "CD19", "CD79A", "MS4A1", #bcells
+                      "CD14","FCGR3A","S100A8", "S100A12", #monocytes
+                      "PPBP", "GNG11", #megakaryocytes
+                      "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                      "IGJ", "MZB1", #plasma cells
+                      "HBA1","HBA2", "HBB", #erythrocytes
+                      "MKI67","CDK1" )#MKI 
+
+
+Idents(CD4CD8T) <- "seurat_clusters"
+DotPlot(CD4CD8T, cols =,features = canonical.genes
+) + RotatedAxis()
+```
+
+## Identification based on Cell types
+```{r}
+#CD4 T Cytotoxic: 0,1,4
+#CD4 T Memory: 3
+#CD8 T: 2
+
+Idents(CD4CD8T) <- "seurat_clusters"
+new.cluster.ids <- c("CD4 T Cytotoxic", "CD4 T Cytotoxic", "CD8 T","CD4 T Memory", "CD4 T Cytotoxic")
+
+names(new.cluster.ids) <- levels(CD4CD8T)
+CD4CD8T <- RenameIdents(CD4CD8T, new.cluster.ids)
+
+CD4CD8T$ct.consensus <- Idents(CD4CD8T)
+
+
+p1 <- DimPlot(CD4CD8T, reduction = "umap", pt.size = 0.8, group.by = "ct.consensus", label = TRUE)
+p2 <- DimPlot(CD4CD8T, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+
+#saveRDS(CD4CD8T, file = paste0(work.dir, "Data/CD4CD8T.rds"))
+```
+
+# Bcells cells: PCA, Clustering, and expression of immune cell type signatures
+
+## Scaling data and PCA
+```{r}
+Bcells <-  FindVariableFeatures(Bcells, selection.method = "vst", nfeatures = 2000) %>%
+  ScaleData(features = row.names(Bcells))
+
+Bcells <- RunPCA(Bcells, features = VariableFeatures(Bcells))
+p1 <- DimPlot(object = Bcells, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = Bcells, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+```
+
+## Batch Correction with Harmony
+```{r}
+Bcells <- Bcells %>% RunHarmony(group.by.vars ="batch", plot_convergence = TRUE)
+
+p1 <- DimPlot(object = Bcells, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = Bcells, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+ElbowPlot(object = Bcells, ndims = 20, reduction = "harmony")
+```
+
+## Clustering and UMAP
+```{r}
+Bcells <- Bcells %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = 0.8) %>%
+  RunUMAP(reduction = "harmony", dims = 1:10)
+
+p1 <- DimPlot(Bcells, reduction = "umap", pt.size = 0.8, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(Bcells, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+```
+
+## Protein marker expression
+```{r}
+Res <- cbind.data.frame(as.matrix(Bcells$seurat_clusters), t(as.matrix(Bcells[['ADT']]@data)))
+colnames(Res)[1] <- "clusters"
+ResFlat <- reshape2::melt(Res)
+colnames(ResFlat) <- c("clusters","protein.markers", "expression")
+
+ResFlat$protein.markers <- factor(ResFlat$protein.markers, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"))
+ResFlat$clusters <- factor(ResFlat$clusters, levels = 0:6)
+
+protein.plot <- ggplot2::ggplot(ResFlat, aes(
+  x = protein.markers, y = expression,
+  fill = protein.markers)) +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~clusters, scales="fixed") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+protein.plot
+```
+
+## Average Scaled Expression of immune cell type signatures
+```{r}
+ct.interest <- c("B cells naive", "B cells memory", "Plasma cells")
+Bcells1 <- AddModuleScore(Bcells, features = immune.genesets[ct.interest], name = ct.interest, search = T)
+
+cell.types <- levels(Bcells1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Bcells1) <- "seurat_clusters"
+  Bcells1 <- subset(Bcells1, idents = c(cell.types[x]))
+  group <- Bcells1$seurat_clusters
+  meta.data <- abs(Bcells1@meta.data[c(16:18)])
+  plot.sets <- vlnplot(Bcells1, meta.data,group = group, cell.type = cell.types[x]) + ggpubr::stat_compare_means(method = "anova")
+  
+  return(plot.sets)
+})
+```
+
+## Average expression of gene markers 
+```{r}
+canonical.genes <-  c("CD3D", "CD3G", "TRAC", #tcell
+                      "CD8A","CD8B","TRDC",#cd8 and tdeltagamma
+                      "GNLY", "NKG7", #nk cells
+                      "CCR7","SELL","LEF1","TCF7", # Noncytotoxic
+                      "CREM", #activated, effector
+                      "GZMH","GZMB","GZMA","PRF1", #cytotoxic
+                      "CD19", "CD79A", "MS4A1", #bcells
+                      "CD14","FCGR3A","S100A8", "S100A12", #monocytes
+                      "PPBP", "GNG11", #megakaryocytes
+                      "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                      "IGJ", "MZB1", #plasma cells
+                      "HBA1","HBA2", "HBB", #erythrocytes
+                      "MKI67","CDK1" )#MKI 
+
+
+Idents(Bcells) <- "seurat_clusters"
+DotPlot(Bcells, cols =,features = canonical.genes
+) + RotatedAxis()
+```
+
+## Identification based on Cell types
+```{r}
+#B Mem: 0,2,4
+#B Naive: 1,3,5, 6
+
+Idents(Bcells) <- "seurat_clusters"
+new.cluster.ids <- c("BC Memory", "BC Naive", "BC Memory","BC Naive", "BC Memory", "BC Naive",
+                     "BC Naive")
+
+names(new.cluster.ids) <- levels(Bcells)
+Bcells <- RenameIdents(Bcells, new.cluster.ids)
+
+Bcells$ct.consensus <- Idents(Bcells)
+
+p1 <- DimPlot(Bcells, reduction = "umap", pt.size = 0.8, group.by = "ct.consensus", label = TRUE)
+p2 <- DimPlot(Bcells, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+
+#saveRDS(Bcells, file = paste0(work.dir, "Data/Bcells.rds"))
+```
+
+# Myeloid cells: PCA, Clustering, and expression of immune cell type signatures
+## Scaling data and PCA
+```{r}
+Myeloid <-  FindVariableFeatures(Myeloid, selection.method = "vst", nfeatures = 2000) %>%
+  ScaleData(features = row.names(Myeloid))
+
+Myeloid <- RunPCA(Myeloid, features = VariableFeatures(Myeloid))
+p1 <- DimPlot(object = Myeloid, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = Myeloid, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+```
+
+## Batch Correction with Harmony
+```{r}
+Myeloid <- Myeloid %>% RunHarmony(group.by.vars ="batch", plot_convergence = TRUE)
+
+p1 <- DimPlot(object = Myeloid, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = Myeloid, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+ElbowPlot(object = Myeloid, ndims = 20, reduction = "harmony")
+```
+
+## Clustering and UMAP
+```{r}
+Myeloid <- Myeloid %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = 0.8) %>%
+  RunUMAP(reduction = "harmony", dims = 1:10)
+
+p1 <- DimPlot(Myeloid, reduction = "umap", pt.size = 0.8, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(Myeloid, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+```
+
+
+## Protein marker expression
+```{r}
+Res <- cbind.data.frame(as.matrix(Myeloid$seurat_clusters), t(as.matrix(Myeloid[['ADT']]@data)))
+colnames(Res)[1] <- "clusters"
+ResFlat <- reshape2::melt(Res)
+colnames(ResFlat) <- c("clusters","protein.markers", "expression")
+
+ResFlat$protein.markers <- factor(ResFlat$protein.markers, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"))
+ResFlat$clusters <- factor(ResFlat$clusters, levels = 0:4)
+
+protein.plot <- ggplot2::ggplot(ResFlat, aes(
+  x = protein.markers, y = expression,
+  fill = protein.markers)) +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~clusters, scales="fixed") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+protein.plot
+
+DotPlot(Myeloid, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "ADT") + RotatedAxis()
+
+DotPlot(Myeloid, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "RNA") + RotatedAxis()
+```
+
+## Average Scaled Expression of immune cell type signatures
+```{r}
+ct.interest <- names(immune.genesets)[15:26]
+
+Myeloid1 <- AddModuleScore(Myeloid, features = immune.genesets[ct.interest], name = ct.interest, search = T)
+
+cell.types <- levels(Myeloid1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(Myeloid1) <- "seurat_clusters"
+  Myeloid1 <- subset(Myeloid1, idents = c(cell.types[x]))
+  group <- Myeloid1$seurat_clusters
+  meta.data <- abs(Myeloid1@meta.data[c(16:27)])
+  plot.sets <- vlnplot(Myeloid1, meta.data,group = group, cell.type = cell.types[x]) + ggpubr::stat_compare_means(method = "anova")
+  
+  return(plot.sets)
+})
+```
+
+## Average expression of gene markers 
+```{r}
+canonical.genes <-  c("CD3D", "CD3G", "TRAC", #tcell
+                      "CD8A","CD8B","TRDC",#cd8 and tdeltagamma
+                      "GNLY", "MyeloidG7", #Myeloid cells
+                      "CCR7","SELL","LEF1","TCF7", # Noncytotoxic
+                      "CREM", #activated, effector
+                      "GZMH","GZMB","GZMA","PRF1", #cytotoxic
+                      "CD19", "CD79A", "MS4A1", #Myeloid
+                      "CD14","FCGR3A","S100A8", "S100A12", #monocytes
+                      "PPBP", "GNG11", #megakaryocytes
+                      "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                      "IGJ", "MZB1", #plasma cells
+                      "HBA1","HBA2", "HBB", #erythrocytes
+                      "MKI67","CDK1" )#MKI 
+
+
+Idents(Myeloid) <- "seurat_clusters"
+DotPlot(Myeloid, cols =,features = canonical.genes
+) + RotatedAxis()
+```
+
+## Identification based on Cell types
+```{r}
+#mDC: 0,3
+#pDC: 1
+#MGK: 2,4
+
+Idents(Myeloid) <- "seurat_clusters"
+new.cluster.ids <- c("mDC", "pDC", "MGK","mDC", "MGK")
+
+names(new.cluster.ids) <- levels(Myeloid)
+Myeloid <- RenameIdents(Myeloid, new.cluster.ids)
+
+Myeloid$ct.consensus <- Idents(Myeloid)
+
+p1 <- DimPlot(Myeloid, reduction = "umap", pt.size = 0.8, group.by = "ct.consensus", label = TRUE)
+p2 <- DimPlot(Myeloid, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+
+#saveRDS(Myeloid, file = paste0(work.dir, "Data/Myeloid.rds"))
+```
+
+# NK cells: PCA, Clustering, and expression of immune cell type signatures
+## Scaling data and PCA
+```{r}
+NK <-  FindVariableFeatures(NK, selection.method = "vst", nfeatures = 2000) %>%
+  ScaleData(features = row.names(NK))
+
+NK <- RunPCA(NK, features = VariableFeatures(NK))
+p1 <- DimPlot(object = NK, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = NK, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+```
+
+## Batch Correction with Harmony
+```{r}
+NK <- NK %>% RunHarmony(group.by.vars ="batch", plot_convergence = TRUE)
+
+p1 <- DimPlot(object = NK, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = NK, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+ElbowPlot(object = NK, ndims = 20, reduction = "harmony")
+```
+
+## Clustering and UMAP
+```{r}
+NK <- NK %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = 0.8) %>%
+  RunUMAP(reduction = "harmony", dims = 1:10)
+
+p1 <- DimPlot(NK, reduction = "umap", pt.size = 0.8, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(NK, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+```
+
+## Protein marker expression
+```{r}
+Res <- cbind.data.frame(as.matrix(NK$seurat_clusters), t(as.matrix(NK[['ADT']]@data)))
+colnames(Res)[1] <- "clusters"
+ResFlat <- reshape2::melt(Res)
+colnames(ResFlat) <- c("clusters","protein.markers", "expression")
+
+ResFlat$protein.markers <- factor(ResFlat$protein.markers, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"))
+ResFlat$clusters <- factor(ResFlat$clusters, levels = 0:8)
+
+protein.plot <- ggplot2::ggplot(ResFlat, aes(
+  x = protein.markers, y = expression,
+  fill = protein.markers)) +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~clusters, scales="fixed") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+protein.plot
+
+DotPlot(NK, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "ADT") + RotatedAxis()
+
+DotPlot(NK, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "RNA") + RotatedAxis()
+```
+
+## Average Scaled Expression of immune cell type signatures
+```{r}
+ct.interest <- c("NK cells resting", "NK cells activated", "NK cells")
+NK.sig <- list("NK cells" = unique(do.call(c,immune.genesets[c("NK cells resting", "NK cells activated")])))
+immune.genesets <- c(immune.genesets, NK.sig)
+
+NK1 <- AddModuleScore(NK, features = immune.genesets[ct.interest], name = ct.interest, search = T)
+
+cell.types <- levels(NK1$seurat_clusters)
+plot.sets <- lapply(1:length(cell.types), function(x){
+  Idents(NK1) <- "seurat_clusters"
+  NK1 <- subset(NK1, idents = c(cell.types[x]))
+  group <- NK1$seurat_clusters
+  meta.data <- abs(NK1@meta.data[c(16:18)])
+  plot.sets <- vlnplot(NK1, meta.data,group = group, cell.type = cell.types[x]) + ggpubr::stat_compare_means(method = "anova")
+  
+  return(plot.sets)
+})
+
+#Average expression of gene markers 
+
+canonical.genes <-  c("CD3D", "CD3G", "TRAC", #tcell
+                      "CD8A","CD8B","TRDC",#cd8 and tdeltagamma
+                      "GNLY", "NKG7", #NK cells
+                      "CCR7","SELL","LEF1","TCF7", # Noncytotoxic
+                      "CREM", #activated, effector
+                      "GZMH","GZMB","GZMA","PRF1", #cytotoxic
+                      "CD19", "CD79A", "MS4A1", #NK
+                      "CD14","FCGR3A","S100A8", "S100A12", #monocytes
+                      "PPBP", "GNG11", #megakaryocytes
+                      "LILRA4","TSPAN13", "GPR183", "IL3RA", #DC
+                      "IGJ", "MZB1", #plasma cells
+                      "HBA1","HBA2", "HBB", #erythrocytes
+                      "MKI67","CDK1" )#MKI 
+
+
+Idents(NK) <- "seurat_clusters"
+DotPlot(NK, cols =,features = canonical.genes
+) + RotatedAxis()
+```
+
+## Identification based on Cell types
+```{r}
+Idents(NK) <- "seurat_clusters"
+new.cluster.ids <- rep("NK",9)
+
+names(new.cluster.ids) <- levels(NK)
+NK <- RenameIdents(NK, new.cluster.ids)
+
+NK$ct.consensus <- Idents(NK)
+
+p1 <- DimPlot(NK, reduction = "umap", pt.size = 0.8, group.by = "ct.consensus", label = TRUE)
+p2 <- DimPlot(NK, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+
+#saveRDS(NK, file = paste0(work.dir, "Data/NK.rds"))
+```
+
+# CD14 Monocytes: PCA, Clustering, and expression of immune cell type signatures
+## Scaling data and PCA
+```{r}
+M14 <-  FindVariableFeatures(M14, selection.method = "vst", nfeatures = 2000) %>%
+  ScaleData(features = row.names(M14))
+
+M14 <- RunPCA(M14, features = VariableFeatures(M14))
+p1 <- DimPlot(object = M14, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = M14, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+```
+
+## Batch Correction with Harmony
+```{r}
+M14 <- M14 %>% RunHarmony(group.by.vars ="batch", plot_convergence = TRUE)
+
+p1 <- DimPlot(object = M14, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = M14, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+ElbowPlot(object = M14, ndims = 20, reduction = "harmony")
+```
+
+## Clustering and UMAP
+```{r}
+M14 <- M14 %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = 0.8) %>%
+  RunUMAP(reduction = "harmony", dims = 1:10)
+
+p1 <- DimPlot(M14, reduction = "umap", pt.size = 0.8, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(M14, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+```
+
+## Protein marker expression
+```{r}
+Res <- cbind.data.frame(as.matrix(M14$seurat_clusters), t(as.matrix(M14[['ADT']]@data)))
+colnames(Res)[1] <- "clusters"
+ResFlat <- reshape2::melt(Res)
+colnames(ResFlat) <- c("clusters","protein.markers", "expression")
+
+ResFlat$protein.markers <- factor(ResFlat$protein.markers, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"))
+ResFlat$clusters <- factor(ResFlat$clusters, levels = 0:8)
+
+protein.plot <- ggplot2::ggplot(ResFlat, aes(
+  x = protein.markers, y = expression,
+  fill = protein.markers)) +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~clusters, scales="fixed") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+protein.plot
+
+DotPlot(M14, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "ADT") + RotatedAxis()
+
+DotPlot(M14, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "RNA") + RotatedAxis()
+```
+
+# CD16 Monocytes: PCA, Clustering, and expression of immune cell type signatures
+## Scaling data and PCA
+```{r}
+M16 <-  FindVariableFeatures(M16, selection.method = "vst", nfeatures = 2000) %>%
+  ScaleData(features = row.names(M16))
+
+M16 <- RunPCA(M16, features = VariableFeatures(M16))
+p1 <- DimPlot(object = M16, reduction = "pca", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = M16, features = "PC_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+```
+
+## Batch Correction with Harmony
+```{r}
+M16 <- M16 %>% RunHarmony(group.by.vars ="batch", plot_convergence = TRUE)
+
+p1 <- DimPlot(object = M16, reduction = "harmony", pt.size = .1, group.by = "batch")
+p2 <- VlnPlot(object = M16, features = "harmony_1", group.by = "batch", pt.size = .1)
+plot_grid(p1,p2)
+ElbowPlot(object = M16, ndims = 20, reduction = "harmony")
+```
+
+## Clustering and UMAP
+```{r}
+M16 <- M16 %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:10) %>% 
+  FindClusters(resolution = 0.8) %>%
+  RunUMAP(reduction = "harmony", dims = 1:10)
+
+p1 <- DimPlot(M16, reduction = "umap", pt.size = 0.8, group.by = "seurat_clusters", label = TRUE)
+p2 <- DimPlot(M16, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+```
+
+## Protein marker expression
+```{r}
+Res <- cbind.data.frame(as.matrix(M16$seurat_clusters), t(as.matrix(M16[['ADT']]@data)))
+colnames(Res)[1] <- "clusters"
+ResFlat <- reshape2::melt(Res)
+colnames(ResFlat) <- c("clusters","protein.markers", "expression")
+
+ResFlat$protein.markers <- factor(ResFlat$protein.markers, levels = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"))
+ResFlat$clusters <- factor(ResFlat$clusters, levels = 0:8)
+
+protein.plot <- ggplot2::ggplot(ResFlat, aes(
+  x = protein.markers, y = expression,
+  fill = protein.markers)) +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(~clusters, scales="fixed") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+protein.plot
+
+DotPlot(M16, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "ADT") + RotatedAxis()
+
+DotPlot(M16, features = c("CD3D","CD4","CD8A","NCAM1","CD19","CD33","CD14","FCGR3A", "CD274","PDCD1"), assay = "RNA") + RotatedAxis()
+```
+
+# Integrate cell type identification results based on results for each main subpopulation of cells
+```{r}
+Idents(CD4T) <- "ct.consensus"
+Idents(CD4CD8T) <- "ct.consensus"
+Idents(CD8T) <- "ct.consensus"
+Idents(CD8Tsubset.CD4CD8mix.V1) <- "ct.consensus"
+Idents(CD8Tsubset.CD4CD8mix.V2) <- "ct.consensus"
+Idents(Bcells) <- "ct.consensus"
+Idents(Myeloid) <- "ct.consensus"
+Idents(NK) <- "ct.consensus"
+
+Idents(pbmc.necs) <- "ADT.cell.types"
+Idents(pbmc.necs, cells = WhichCells(CD4T, idents = "CD4 T Naive")) <- "CD4 T Naive"
+Idents(pbmc.necs, cells = WhichCells(CD4T, idents = "CD4 T Memory")) <- "CD4 T Memory"
+Idents(pbmc.necs, cells = WhichCells(CD4T, idents = "CD8 T")) <- "CD8 T"
+Idents(pbmc.necs, cells = WhichCells(CD4Tsubset.CD4CD8mix, idents = "CD4 T Memory")) <- "CD4 T Memory"
+Idents(pbmc.necs, cells = WhichCells(CD4Tsubset.CD4CD8mix, idents = "CD8 T")) <- "CD8 T"
+Idents(pbmc.necs, cells = WhichCells(CD8T, idents = "CD8 T")) <- "CD8 T"
+Idents(pbmc.necs, cells = WhichCells(CD8Tsubset.CD4CD8mix.V1, idents = "CD8 T")) <- "CD8 T"
+Idents(pbmc.necs, cells = WhichCells(CD8Tsubset.CD4CD8mix.V2, idents = "CD8 T")) <- "CD8 T"
+Idents(pbmc.necs, cells = WhichCells(CD8Tsubset.CD4CD8mix.V2, idents = "CD4 T Cytotoxic")) <- "CD4 T Cytotoxic"
+Idents(pbmc.necs, cells = WhichCells(CD4CD8T, idents = "CD4 T Cytotoxic")) <- "CD4 T Cytotoxic"
+Idents(pbmc.necs, cells = WhichCells(CD4CD8T, idents = "CD8 T")) <- "CD8 T"
+Idents(pbmc.necs, cells = WhichCells(CD4CD8T, idents = "CD4 T Memory")) <- "CD4 T Memory"
+
+Idents(pbmc.necs, cells = WhichCells(Bcells, idents = "BC Naive")) <- "BC Naive"
+Idents(pbmc.necs, cells = WhichCells(Bcells, idents = "BC Memory")) <- "BC Memory"
+
+Idents(pbmc.necs, cells = WhichCells(Myeloid, idents = "mDC")) <- "mDC"
+Idents(pbmc.necs, cells = WhichCells(Myeloid, idents = "pDC")) <- "pDC"
+Idents(pbmc.necs, cells = WhichCells(Myeloid, idents = "MGK")) <- "MGK"
+Idents(pbmc.necs, cells = WhichCells(pbmc.necs, idents = "NK")) <- "NK"
+
+
+pbmc.necs$ct.consensus <- Idents(pbmc.necs)
+```
+
+# Visualize final cell types in UMAP
+```{r}
+p1 <- DimPlot(pbmc.necs, reduction = "umap", pt.size = 0.8, group.by = "ct.consensus")
+p2 <- DimPlot(pbmc.necs, reduction = "umap", pt.size = 0.8, group.by = "ADT.cell.types")
+plot_grid(p1, p2)
+
+
+#saveRDS(pbmc.necs,paste0(work.dir,"Data/pbmc.necs.rds"))
+
+knitr::kable(table(pbmc.necs$ADT.cell.types, pbmc.necs$ct.consensus))
+```

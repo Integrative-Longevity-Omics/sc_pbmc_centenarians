@@ -1,0 +1,309 @@
+---
+title: "Seurat Analysis of Centenarian Data from George Murphy's Lab"
+author: "Tanya Karagiannis"
+date: "02/24/20"
+output: html_document
+---
+
+Seurat 3
+R/3.6.0
+
+
+Purpose: 
+scRNA-seq data of 3 centenarians, 1 supercentenarian, and 2 controls
+Normalize data using sctransform
+
+
+
+Load libraries
+```{r}
+suppressMessages(
+c(library(readr),
+library(dplyr),
+library(Seurat),
+library(Matrix),
+#library(Matrix.utils),
+library(useful),
+library(biomaRt),
+library(cowplot),
+library(harmony))
+)
+
+```
+
+Load Seurat object with RNA counts and add metadata
+```{r}
+#load RNA counts for each sample in a list
+samples <- c("BU10","BU6","SCN1","SCN2","SCN4","SCN6")
+
+#cent_list <- lapply(1:length(samples), function(x){
+#  temp <- Read10X_h5(paste0("/restricted/projectnb/uh2-sebas/data/Transcriptomics/centenarian_data/raw_counts/",samples[x],"_filtered_feature_bc_matrix.h5"), use.names = TRUE, unique.features = TRUE)
+#  mat <- CreateSeuratObject(counts = temp$`Gene Expression`, project = samples[x])
+#}
+#  )
+#names(cent_list) <- samples
+
+
+
+#aggregate sample matrices into one large matrix
+
+#PBMC_cent <- merge(cent_list[[1]], y = cent_list[2:6], add.cell.ids = samples, project = "pbmc-cent")
+
+#gene expression and antibody data
+cent_list <- Read10X("/restricted/projectnb/uh2-sebas/data/Transcriptomics/singleCell/GM_centenarian_2020/bams/cellranger_count_wADT/GM_combined/outs/filtered_feature_bc_matrix/")
+
+#Metadata
+library(readr)
+GM_SCN_Metadata <- read_csv("/restricted/projectnb/uh2-sebas/data/Transcriptomics/singleCell/GM_centenarian_2020/GM_SCN_Metadata.csv")
+
+#RNA data
+PBMC_cent <- CreateSeuratObject(counts = cent_list$`Gene Expression`, project = "GM_centenarian")
+
+#Antibody data
+PBMC_cent[["ADT"]] <- CreateAssayObject(counts = cent_list$`Antibody Capture`)
+
+#head(PBMC_cent@meta.data)
+
+#unique(sapply(X = strsplit(colnames(PBMC_cent), split = "_"), FUN = "[", 2))
+
+#table(PBMC_cent$orig.ident)
+
+
+#save data
+saveRDS(PBMC_cent, file = "PBMC_cent.rds")
+```
+
+Add metadata information
+```{r}
+#sample
+for (n in 1:length(samples)){
+  Idents(PBMC_cent, cells = colnames(PBMC_cent)[grep(paste0("\\-", n,sep = ""), colnames(PBMC_cent))]) <- samples[n]
+}
+
+PBMC_cent$sample <- Idents(PBMC_cent)
+
+#sample
+
+Idents(PBMC_cent, cells = WhichCells(PBMC_cent, idents = c("BU10", "BU6"))) <- "control"
+Idents(PBMC_cent, cells = WhichCells(PBMC_cent, idents = c("SCN1", "SCN2","SCN4","SCN6"))) <- "centenarian"
+
+
+PBMC_cent$condition <- Idents(PBMC_cent)
+
+
+#age
+
+age <- unlist(sapply(1:nrow(PBMC_cent@meta.data), function(x){GM_SCN_Metadata$`Age`[GM_SCN_Metadata$`Line Name` %in% PBMC_cent@meta.data$`sample`[x]]}))
+
+PBMC_cent <- AddMetaData(PBMC_cent, age, col.name = "age")
+
+#sex
+sex <- unlist(sapply(1:nrow(PBMC_cent@meta.data), function(x){GM_SCN_Metadata$`Sex`[GM_SCN_Metadata$`Line Name` %in% PBMC_cent@meta.data$`sample`[x]]}))
+
+PBMC_cent <- AddMetaData(PBMC_cent, sex, col.name = "sex")
+
+head(PBMC_cent@meta.data)
+```
+
+Number of cells per sample
+```{r}
+
+table_age <- table(PBMC_cent$`sample`, PBMC_cent$`orig.ident`)
+table_age <- as.data.frame(table_age)
+colnames(table_age) <- c("sample", "orig.ident", "num.cells")
+
+condition <- unlist(sapply(1:nrow(table_age), function(x){unique(PBMC_cent@meta.data$condition[PBMC_cent@meta.data$sample %in% table_age$sample[x]])}))
+table_age$age <- condition
+
+p1 <- ggplot(table_age, aes(`age`, `num.cells`)) + geom_bar(stat = "identity", aes(group = `sample`, fill = age), color = "black", position = "dodge") +
+  #scale_fill_manual(values=RColorBrewer::brewer.pal(n = 3, name = "PRGn")) + 
+  #geom_text(aes(label=sample), vjust=2, hjust = 2,color="black",size=10, nudge_x = 0.15) +
+  theme_classic(base_size = 20)
+ 
+p2 <- ggplot(table_age, aes(`age`, `num.cells`)) + geom_bar(stat = "identity", aes(group = `sample`, fill = sample), color = "black", position = "dodge") +
+  #scale_fill_manual(values=RColorBrewer::brewer.pal(n = 3, name = "PRGn")) + 
+  #geom_text(aes(label=sample), vjust=2, hjust = 2,color="black",size=10, nudge_x = 0.15) +
+  theme_classic(base_size = 20)
+
+```
+
+Visualize UMI counts, Gene counts, and percent of mitochondrial genes expressed
+```{r}
+PBMC_cent[["percent.mt"]] <- PercentageFeatureSet(PBMC_cent, pattern = "^MT-")
+
+
+VlnPlot(PBMC_cent, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "sample",ncol = 3)
+
+
+saveRDS(PBMC_cent, file = "PBMC_cent.rds")
+```
+
+Normalize and perform PCA analysis
+Filtered gene count filter out 200 and above 3000, and percent.mito above 15%
+Filtered out UMI count above 15000
+Selection of highly variable genes: selected top 2000 hvgs
+Normalization using regular method 
+Note: sctransform created a larger separation of samples in dimensional reduction methods
+```{r}
+
+Idents(PBMC_cent) <- "orig.ident"
+PBMC_cent <- subset(PBMC_cent, nFeature_RNA > 200 & nFeature_RNA < 3000 & nCount_RNA < 15000 & percent.mt < 15) %>%
+            NormalizeData(normalization.method = "LogNormalize", scale.factor = 10000) %>%
+            FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>%
+            ScaleData(features = row.names(PBMC_cent))
+
+#PBMC_cent <- SCTransform(PBMC_cent, vars.to.regress = "nCount_RNA" ,verbose = FALSE)
+
+PBMC_cent <- RunPCA(PBMC_cent, verbose=FALSE)
+            
+p1 <- DimPlot(object = PBMC_cent, reduction = "pca", pt.size = 0.5, group.by = "sample")
+p2 <- VlnPlot(object = PBMC_cent, features = "PC_1", group.by = "sample",pt.size = 0.5)
+plot_grid(p1,p2)
+
+ElbowPlot(PBMC_cent)
+
+saveRDS(PBMC_cent, file = "./PBMC_cent.rds")
+
+```
+
+Cluster and visualize samples.
+
+```{r }
+
+PBMC_cent <- PBMC_cent %>% 
+    RunTSNE(dims = 1:10) %>% 
+    FindNeighbors(dims = 1:10) %>% 
+    FindClusters(resolution = 0.5) %>% 
+    identity()
+
+saveRDS(PBMC_cent, file = "./PBMC_cent.rds")
+
+# Projecting singlet identities on TSNE visualization
+p1 <- DimPlot(PBMC_cent, reduction = "tsne", pt.size = 0.5, label = TRUE)
+p2 <- DimPlot(PBMC_cent, group.by = "sample",reduction = "tsne", pt.size = 0.5)
+plot_grid(p1,p2)
+```
+
+```{r}
+
+row.names(PBMC_cent[['ADT']]) <- c("CD3","CD4","CD8","CD19","CD33","CD14","CD56","CD16",
+                                   "CD279","CD274")
+
+PBMC_cent <- NormalizeData(PBMC_cent, assay = "ADT", normalization.method = "CLR") %>%
+  ScaleData(assay = "ADT")
+FeaturePlot(PBMC_cent, features = rownames(PBMC_cent[["ADT"]]), min.cutoff = "q05", max.cutoff = "q95", ncol = 4)
+
+```
+
+Module Scores
+-CIBERSORT genesets
+```{r}
+CIBERSORT_genesets <- readRDS("/restricted/projectnb/montilab-p/personal/tanya/scRNA-aging/lifelines/02.Analysis/enrichment_check/CIBERSORT_genesets.rds")
+
+PBMC_cent <- AddModuleScore(PBMC_cent, features = CIBERSORT_genesets, name = names(CIBERSORT_genesets))
+
+FeaturePlot(PBMC_cent, features = colnames(PBMC_cent@meta.data)[13:34])
+
+```
+
+Average expression of gene markers
+```{r}
+
+markers.to.plot <- c("CD3D", "CREM", "HSPH1", "SELL", "GIMAP5", "CACYBP", "GZMB","KLRC1","GNLY", "NKG7", "CCL5", 
+                     "CD8A", "MS4A1", "CD79A", "MIR155HG", "NME1", "FCGR3A", "VMO1", "CCL2", "S100A9",
+                     "GPR183", "PPBP", "GNG11", "HBA2", "HBB","TSPAN13", "IL3RA","MZB1")
+DotPlot(PBMC_cent, features = rev(markers.to.plot), dot.scale = 8) + RotatedAxis()
+
+```
+
+Set cell types
+```{r}
+Idents(PBMC_cent) <- "seurat_clusters"
+new.cluster.ids <- c("T helper","T helper", "NK", "cMonocyte", "CD8", "cMonocyte", "NK", "T helper","B","ncMonocyte","Megakaryocyte","mDC","pDC")
+names(new.cluster.ids) <- levels(PBMC_cent)
+PBMC_cent <- RenameIdents(PBMC_cent, new.cluster.ids)
+DimPlot(PBMC_cent, reduction = "tsne", label = TRUE, pt.size = 0.5)
+
+PBMC_cent$cell.type <- Idents(PBMC_cent)
+
+p1 <- DimPlot(PBMC_cent, group.by = "cell.type",reduction = "tsne", pt.size = 0.5, label = TRUE)
+p2 <- DimPlot(PBMC_cent, group.by = "sample",reduction = "tsne", pt.size = 0.5)
+plot_grid(p1,p2)
+
+```
+
+```{r}
+table_age <- prop.table(table(PBMC_cent@meta.data$`cell.type`, PBMC_cent@meta.data$`sample`), margin = 2)
+
+#table_age <- as.matrix(table_age)
+
+table_age <- as.data.frame(table_age)
+colnames(table_age) <- c("cell.type","sample","prop")
+
+condition <- unlist(sapply(1:nrow(table_age), function(x){unique(PBMC_cent@meta.data$condition[PBMC_cent@meta.data$sample %in% table_age$sample[x]])}))
+table_age$age <- condition
+
+#anova test
+lapply(1:length(levels(PBMC_cent$cell.type)), function(n){
+  fit <- aov(prop~age, data = table_age[table_age$cell.type == levels(PBMC_cent$cell.type)[n],])
+  summary(fit)
+}
+  )
+
+#t test
+lapply(1:length(levels(PBMC_cent$cell.type)), function(n){
+  fit <- t.test(prop~age, data = table_age[table_age$cell.type == levels(PBMC_cent$cell.type)[n],])
+}
+  )
+
+
+p3 <- ggplot(table_age, aes(age, prop)) + geom_boxplot(aes(fill = age)) + geom_point() + facet_wrap(~`cell.type`, scales = "free_y", nrow = 3) + 
+  ylim(0,0.75) + 
+  theme_classic(base_size = 20)
+
+ggplot(table_age, aes(`sample`, `prop` )) + geom_bar(stat = "identity", aes(group = `cell.type`, fill = `cell.type`), color = "black",position = "dodge") +
+  theme_classic(base_size = 20)
+
+table_age <- prop.table(table(PBMC_cent@meta.data$`cell.type`, PBMC_cent@meta.data$`sample`), margin = 1)
+
+library(reshape2)
+table_age <- melt(table_age)
+colnames(table_age) <- c("cell.type","sample","prop")
+
+condition <- unlist(sapply(1:nrow(table_age), function(x){unique(PBMC_cent@meta.data$condition[PBMC_cent@meta.data$sample %in% table_age$sample[x]])}))
+table_age$age <- condition
+
+ggplot(table_age, aes(`cell.type`, `prop` )) + geom_bar(stat = "identity", aes(group = `sample`, fill = `sample`), color = "black",position = "dodge") +
+  theme_classic(base_size = 20) + ylab("prop of cells in each cell.type")
+```
+
+```{r}
+table_age <- table(PBMC_cent@meta.data$`condition`, PBMC_cent@meta.data$`cell.type`)
+
+chi_result <- chisq.test(table_age)
+
+source("assoc.matrix.R")
+res <- assoc.matrix(chi_result)
+
+write.csv(res, "assoc.matrix.csv")
+
+
+
+```
+
+
+```{r}
+genes <- unique(unlist(sapply(1:length(ct.sig_res), function(x){res <- names(ct.sig_res[[x]])})))
+genes <- sapply(1:length(ct.sig_res), function(x){
+  res <- t(names(ct.sig_res[[x]]))
+  colnames(res) <- rep(names(ct.sig_res[x]), dim(res)[[2]])
+  return(res)
+  })
+do.call(cbind, genes)
+
+PBMC_cent <- Seurat::SubsetData(PBMC_cent, features = genes)
+
+dat <- PBMC_cent[['RNA']]@scale.data[rownames(PBMC_cent) %in% genes,]
+
+Heatmap(dat, name = "scaled expression", show_column_names = FALSE, show_row_names = FALSE, top_annotation = HeatmapAnnotation(sample = PBMC_cent$sample, cell.type = PBMC_cent$cell.types))
+```
