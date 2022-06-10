@@ -1,0 +1,354 @@
+---
+title: "Cell Type Distribution Score of aging and longevity: CD4 T Noncytotoxic Aggregated"
+author: "Tanya Karagiannis, Stefano Monti, Paola Sebastiani"
+output:
+  html_document:
+    theme: united
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+# Load libraries and data
+```{r}
+suppressMessages(c(
+library(dplyr),
+library(reshape2),
+library(Seurat),
+library(Matrix),
+library(ggplot2),
+library(cowplot),
+library(knitr)
+))
+#source("ggstyle.R")
+
+work.dir <- "/restricted/projectnb/uh2-sebas/analysis/scCentenarians/"
+
+pbmc.combined <- readRDS(file = paste0(work.dir,"Integrated_Data/pbmc.combined.rds"))
+```
+
+# Set the cell type levels we are interested in:
+- keep immune cell type only
+- ct.consensus: subtypes i.e. CD4 T Naive, CD4 T Memory to CD4 T NonCytotoxic
+
+```{r, eval = T, echo = T}
+#Combined CD4 T Memory and Naive to CD4 T NonCytotoxic
+#Set main cell types
+CD4.Mem <- WhichCells(pbmc.combined, idents = "CD4 T Memory")
+CD4.Naive <- WhichCells(pbmc.combined, idents = "CD4 T Naive")
+Idents(pbmc.combined, cells = c(CD4.Naive, CD4.Mem)) <- "CD4 T NonCytotoxic"
+
+pbmc.combined$ct.main <- Idents(pbmc.combined)
+
+```
+
+# Create table of cell type proportions per sample (cell types vs samples)
+```{r}
+ct_prop <- prop.table(table(pbmc.combined@meta.data$ct.main, pbmc.combined@meta.data$sample.ID), margin = 2)
+
+require(knitr)
+require(kableExtra)
+kable(ct_prop, caption = paste0("cell type proportions per sample"),"html") %>% kable_styling("striped") %>% scroll_box(width = "100%",height = "300px")
+```
+
+# Histogram of cell type proportions
+```{r, eval = F}
+print(paste("cell.types:", rownames(ct_prop)))
+p1 <- apply(ct_prop, 1, function(x){hist(x, main = rownames(ct_prop)[x])})
+```
+
+# Check that for each sample, cell type proportions add up to 1 
+```{r}
+apply(ct_prop,2,sum)
+```
+
+# Change data to long format and add Metadata information
+```{r}
+#reshape data to long format
+ct_prop <- melt(ct_prop)
+colnames(ct_prop) <- c("cell.types","sample.ID","proportion")
+
+
+#Add age information to data
+#Set based on age groups: 4 control quartiles, and centenarians
+Age <- unlist(sapply(1:nrow(ct_prop), function(x){unique(pbmc.combined@meta.data$age.quartiles[pbmc.combined@meta.data$sample.ID %in% ct_prop$sample.ID[x]])}))
+
+ct_prop$age <- Age
+ct_prop$age <- factor(ct_prop$age, levels = c("20-39","40-59","60-89", "Extreme Longevity"))
+levels(ct_prop$age) <- c("Younger Age","Middle Age", "Older Age", "Extreme Longevity")
+
+#Add sex information
+Sex <- unlist(sapply(1:nrow(ct_prop), function(x){unique(pbmc.combined@meta.data$sex[pbmc.combined@meta.data$sample.ID %in% ct_prop$sample.ID[x]])}))
+
+ct_prop$sex <- Sex
+
+#Add batch information
+Batch <- unlist(sapply(1:nrow(ct_prop), function(x){unique(pbmc.combined@meta.data$batch[pbmc.combined@meta.data$sample.ID %in% ct_prop$sample.ID[x]])}))
+
+ct_prop$batch <- Batch
+ct_prop$batch[ct_prop$batch == "COHORT.B1"] <- "NECS.B1"
+ct_prop$batch[ct_prop$batch == "COHORT.B2"] <- "NECS.B2"
+
+#Add ethnicity information
+Ethnicity <- unlist(sapply(1:nrow(ct_prop), function(x){unique(pbmc.combined@meta.data$batch[pbmc.combined@meta.data$sample.ID %in% ct_prop$sample.ID[x]])}))
+
+Ethnicity[which(Ethnicity == "COHORT.B1")] <- "European"
+Ethnicity[which(Ethnicity == "COHORT.B2")] <- "European"
+Ethnicity[which(Ethnicity == "NATGEN")] <- "European"
+Ethnicity[which(Ethnicity == "PNAS")] <- "Japanese"
+
+ct_prop$ethnic <- Ethnicity
+
+#Add offspring vs. unrelated information, and centenarians vs. supercentenarians
+ct_prop$relation <- "unrelated"
+ct_prop$relation[ct_prop$age == "Extreme Longevity" & ct_prop$ethnic == "Japanese"] <- "supercentenarian"
+ct_prop$relation[ct_prop$age == "Extreme Longevity" & ct_prop$ethnic == "European"] <- "centenarian"
+ct_prop$relation[ct_prop$sample.ID == "SCN4"] <- "supercentenarian"
+ct_prop$relation[ct_prop$sample.ID == "CT2"] <- "offspring"
+ct_prop$relation[ct_prop$sample.ID == "CT5"] <- "offspring"
+ct_prop$relation <- factor(ct_prop$relation, levels = c("unrelated", "offspring", "centenarian", "supercentenarian"))
+
+write.csv(ct_prop, "RelativeProp.MainCT.csv")
+
+```
+
+```{r, echo=F}
+#source('~/risoink.R')
+require(ggforce)
+colors <- c(riso_color("indigo"),
+            riso_color("turquoise"),
+            riso_color("cornflower"),
+            riso_color("violet"),
+            riso_color("lagoon", alpha = 0.8),
+  
+    
+    riso_color("scarlet"),
+    riso_color("apricot"))
+    
+  #   riso_color("burgundy"),
+  #   
+  #   
+  #   riso_color("brick"),
+  # riso_color("pumpkin", alpha = 0.9),
+  # 
+  # riso_color("raspberry-red"),
+  # riso_color("orchid"))
+
+show_colors(colors, "Halcyon-esque")
+
+colors <- c("blue2",
+            "aquamarine3",
+            "turquoise4",
+            "seagreen",
+            "darkorchid4",
+            "red3",
+            "sienna2")
+
+```
+# Plot cell type proportions for all samples grouped by age group
+```{r, fig.dim = c(20, 10)}
+ct_prop$cell.types <- factor(ct_prop$cell.types, levels=c("CD4 T NonCytotoxic","CD4 T Cytotoxic","CD8 T","T gamma delta", "NK","BC Naive","BC Memory","Plasma", "M14","M16","mDC","pDC"))
+levels(ct_prop$cell.types) <- c("CD4 T NonCytotoxic", "CD4 T Cytotoxic", "CD8 T Cytotoxic", "T Gamma Delta", "Natural Killer","B Naive", "B Memory", "Plasma", "CD14 Mono", "CD16 Mono", "Myeloid DC", "Plasmacytoid DC")
+
+age.groups <- levels(ct_prop$age)
+
+#c(colorspace::diverge_hcl(20)[1:5], rev(colorspace::diverge_hcl(20)[c(16,18)])))
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]), aes(interaction(sample.ID, age), proportion)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack", color = "black") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 40) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("cell type proportions in PBMCs") +
+  facet_wrap(~ age) + 
+  ggstyle() + 
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), legend.position = "none") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]), aes(interaction(sample.ID, age), proportion)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack", color = "black") +
+  scale_fill_manual(values = colors)  +
+  theme_classic(base_size = 40) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  facet_wrap(~ age) + 
+  ggstyle() + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "none") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]), aes(interaction(sample.ID, age), proportion)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), color = "black", stat="identity", position = "stack") +
+  scale_fill_manual(values = colors)  +
+  theme_classic(base_size = 40) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  facet_wrap(~ age) + ggstyle() + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "none") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]), aes(interaction(sample.ID, age), proportion)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), color = "black", stat="identity", position = "stack") +
+  scale_fill_manual(values = colors)  + 
+  theme_classic(base_size = 40) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  facet_wrap(~ age) + 
+  ggstyle() + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) 
+
+require(patchwork)
+norm.plot <- p1 + p2 + p3 + p4 + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+ggplot2::ggsave(
+    filename="Figure_02A_main.ct.prop.pdf",
+    plot=norm.plot,
+    path=paste0(work.dir,"/Figures"),
+    scale=1,
+    width = 20,
+    height=8,
+    units="in",
+    dpi=300
+)
+```
+# Plot cell type proportions for all samples grouped by age group
+```{r, fig.dim = c(20, 10)}
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]), aes(interaction(sample.ID, age), proportion)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = c(colorspace::diverge_hcl(20)[c(1:5)], rev(colorspace::diverge_hcl(20)[c(16,18)]))) +
+  theme_classic(base_size = 40) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("immune cell type proportions in PBMCs") +
+  facet_wrap(~ age) + 
+  ggstyle() + 
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), legend.position = "none") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]), aes(interaction(sample.ID, age), proportion)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = c(colorspace::diverge_hcl(20)[c(1:5)], rev(colorspace::diverge_hcl(20)[c(16,18)])))  +
+  theme_classic(base_size = 40) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  facet_wrap(~ age) + 
+  ggstyle() + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "none") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]), aes(interaction(sample.ID, age), proportion)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = c(colorspace::diverge_hcl(20)[c(1:5)], rev(colorspace::diverge_hcl(20)[c(16,18)])))  +
+  theme_classic(base_size = 40) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  facet_wrap(~ age) + ggstyle() + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "none") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]), aes(interaction(sample.ID, age), proportion)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = c(colorspace::diverge_hcl(20)[c(1:5)], rev(colorspace::diverge_hcl(20)[c(16,18)])))  + 
+  theme_classic(base_size = 40) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  facet_wrap(~ age) + 
+  ggstyle() + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) 
+
+require(patchwork)
+norm.plot <- p1 + p2 + p3 + p4 + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+ggplot2::ggsave(
+    filename="Figure_02A_V2_main.ct.prop.pdf",
+    plot=norm.plot,
+    path=paste0(work.dir,"/Figures"),
+    scale=1,
+    width = 20,
+    height=8,
+    units="in",
+    dpi=300
+)
+```
+
+# Calculate cell type distribution score for each sample
+```{r, fig.dim = c(20, 10)}
+#change data back to wide format: samples vs cell types
+dat <- reshape(ct_prop, direction = "wide", idvar=c("sample.ID","age", "sex", "batch", "ethnic", "relation"), timevar="cell.types")
+rownames(dat) <- dat$sample.ID
+dat <- dat[-c(1:6)]
+
+#check that each samples cell type proportions add up to 1
+apply(dat, 1, sum)
+
+#apply entropy calculation to each sample to calculate cell type diversity
+div.res <- apply(dat, 1, function(x){(-sum(x*log(x), na.rm = T)/log(ncol(dat))-1)})
+
+#get wide format back
+dat <- reshape(ct_prop, direction = "wide", idvar=c("sample.ID","age", "sex", "batch", "ethnic", "relation"), timevar="cell.types")
+
+#create matrix with entropy measures and age group information
+div.res <- data.frame(entropy = div.res, dat[2:6])
+write.csv(div.res, file = "CellType.Diversity.MainCT.csv")
+```
+
+# Statistical tests
+- Anova and T-test of cell type diversity between controls and extreme longevity subjects
+- Multiple linear regression to look at trend of cell type diversity based on age
+```{r, fig.dim = c(20, 10)}
+#Add control vs centenarian information
+div.res$EL <- as.numeric(div.res$age == "Extreme Longevity")
+
+#histogram of cell type diversity values
+
+#anova
+lm.model <- lm(entropy ~ age, data = div.res)
+anova(lm.model)
+
+#pairwise t-tests for multiple comparisons
+pairwise.t.test(div.res$entropy, div.res$age, p.adjust.method = "BH")
+
+```
+
+```{r, fig.dim = c(20, 10)}
+#Box plots of cell type diversity of samples grouped by age group and colored by age group
+require(ggplot2)
+plot.ctds <- ggplot(div.res, aes(age, entropy)) + geom_boxplot(aes(fill = age)) + 
+  theme_classic(base_size = 20) + 
+  theme(axis.line=element_line()) + 
+  ylim(-1, 0) +
+  ylab("cell type diversity stastic") +
+  scale_fill_manual(values = c("blue2", "green","red", "maroon")) +
+  ggstyle() + 
+  theme(axis.title.x=element_blank(),
+        legend.position = "none") +
+  ggsignif::geom_signif(
+    y_position = c(0.0), xmin = c(0.5), xmax = c(4.5),
+    annotation = c("***"), tip_length = 0
+  )
+
+plot.ctds
+
+ggplot2::ggsave(
+    filename="Figure_02_ctds.aggregated.pdf",
+    plot=plot.ctds,
+    path=paste0(work.dir,"/Figures"),
+    scale=1,
+    width = 15,
+    height=8,
+    units="in",
+    dpi=300
+)
+
+#Box plots of cell type diversity of samples grouped by age group and colored by batch
+#make sure differences are not affected by batch effects
+require(ggplot2)
+p5 <- ggplot(div.res, aes(age, entropy)) + geom_point(aes(fill = batch),colour = "black",pch = 21,size=3, position = position_dodge(0.3)) + theme_classic(base_size = 30) + theme(axis.line=element_line()) + ylim(0.8, 2.5) + ylab("cell type diversity score") + ggstyle()
+p5
+```
+
