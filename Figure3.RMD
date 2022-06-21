@@ -1,0 +1,1879 @@
+---
+title: "Figure 3"
+author: "Tanya Karagiannis, Stefano Monti, Paola Sebastiani"
+output:
+  html_document:
+    theme: united
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_collapse: false
+---
+
+```{r, echo = F, include = F}
+## Functions to run to make nice figures!
+
+#ink colors from anfed/risoink
+
+#' Raw riso ink colors
+#' 
+#' @keywords internal
+.riso_colors <- function() {
+  c(
+    "black"="#000000",
+    "burgundy"="#914E72",
+    "blue"="#0078BF",
+    "green"="#00A95C",
+    "medium-blue"="#3255A4",
+    "bright-red"="#F15060",
+    "risofederal-blue"="#3D5588",
+    "purple"="#765BA7",
+    "teal"="#00838A",
+    "flat-gold"="#BB8B41",
+    "hunter-green"="#407060",
+    "red"="#FF665E",
+    "brown"="#925F52",
+    "yellow"="#FFE800",
+    "marine-red"="#D2515E",
+    "orange"="#FF6C2F",
+    "fluorescent-pink"="#FF48B0",
+    "light-gray"="#88898A",
+    "metallic-gold"="#AC936E",
+    "crimson"="#E45D50",
+    "fluorescent-orange"="#FF7477",
+    "cornflower"="#62A8E5",
+    "sky-blue"="#4982CF",
+    "sea-blue"="#0074A2",
+    "lake"="#235BA8",
+    "indigo"="#484D7A",
+    "midnight"="#435060",
+    "mist"="#D5E4C0",
+    "granite"="#A5AAA8",
+    "charcoal"="#70747C",
+    "smoky-teal"="#5F8289",
+    "steel"="#375E77",
+    "slate"="#5E695E",
+    "turquoise"="#00AA93",
+    "emerald"="#19975D",
+    "grass"="#397E58",
+    "forest"="#516E5A",
+    "spruce"="#4A635D",
+    "moss"="#68724D",
+    "sea-foam"="#62C2B1",
+    "kelly-green"="#67B346",
+    "light-teal"="#009DA5",
+    "ivy"="#169B62",
+    "pine"="#237E74",
+    "lagoon"="#2F6165",
+    "violet"="#9D7AD2",
+    "orchid"="#AA60BF",
+    "plum"="#845991",
+    "raisin"="#775D7A",
+    "grape"="#6C5D80",
+    "scarlet"="#F65058",
+    "tomato"="#D2515E",
+    "cranberry"="#D1517A",
+    "maroon"="#9E4C6E",
+    "raspberry-red"="#D1517A",
+    "brick"="#A75154",
+    "light-lime"="#E3ED55",
+    "sunflower"="#FFB511",
+    "melon"="#FFAE3B",
+    "apricot"="#F6A04D",
+    "paprika"="#EE7F4B",
+    "pumpkin"="#FF6F4C",
+    "bright-olive-green"="#B49F29",
+    "bright-gold"="#BA8032",
+    "copper"="#BD6439",
+    "mahogany"="#8E595A",
+    "bisque"="#F2CDCF",
+    "bubble-gum"="#F984CA",
+    "light-mauve"="#E6B5C9",
+    "dark-mauve"="#BD8CA6",
+    "wine"="#914E72",
+    "gray"="#928D88",
+    "white"="#FFFFFF",
+    "aqua"="#5EC8E5",
+    "mint"="#82D8D5",
+    "fluorescent-yellow"="#FFE900",
+    "fluorescent-red"="#FF4C65",
+    "fluorescent-green"="#44D62C"
+  )
+}
+
+#' Adjust transparency of a hex string
+#'
+#' @param hex A 6-character hex string (e.g. #000000)
+#' @param percent Transparency level from 0-1
+#' @return A hex string
+#' 
+#' @export
+hex_transparacy <- function(hex, percent=1) {
+  if (percent < 0) percent <- 0
+  if (percent > 1) percent <- 1
+  percent <- toupper(as.hexmode(floor(percent * 255)))
+  percent <- sprintf("%02s", percent)
+  hex <- paste0(hex, percent)
+  return(hex)
+}
+
+#' Riso color names
+#'
+#' @param sorted Optionally sort values
+#' @return A character vector of names
+#' 
+#' @export
+riso_names <- function(sorted=FALSE) {
+  if (sorted) {
+    return(sort(names(.riso_colors())))   
+  } else {
+    return(names(.riso_colors()))
+  }
+}
+
+#' Get a risk ink color
+#'
+#' @param color Color name
+#' @param alpha Color transparency
+#' @return A hex string
+#' 
+#' @export
+riso_color <- function(color, alpha=1) {
+  riso_colors <- .riso_colors()
+  if (color %in% names(riso_colors)) {
+    hex <- riso_colors[[color]]
+    if (alpha >= 1) {
+      return(hex)
+    } else {
+      return(hex_transparacy(hex, alpha))
+    }
+  } else {
+    cat("Riso Ink Colors: \n")
+    print(riso_names(sorted=TRUE))
+    stop("Invalid color")
+  }
+}
+
+#' Plot one or more colors
+#'
+#' @param colors Character vector of hex strings
+#' @param title Optional plot title
+#' @return A `gg` object
+#' 
+#' @import ggplot2
+#' @import ggforce 
+#' 
+#' @export
+show_colors <- function(colors, title="") {
+  df <- data.frame(hex=colors, y=1, x=seq(length(colors)))
+  fill_values <- colors
+  names(fill_values) <- colors
+  ggplot(df, aes(x0=x, y0=y, r=0.4, fill=hex, expand=1)) + 
+    geom_circle() + 
+    scale_fill_manual(values=fill_values) +
+    coord_equal() + 
+    theme_void() +
+    labs(title=paste0("  ", title, "\n")) + 
+    xlim(0, max(7, nrow(df))+1) +
+    theme(legend.position="none")
+}
+
+
+#Plot using ggstyle to easily change specific aspects
+#from montilab/best-practices
+#function to modify ggplot parameters from montilab/best-practices
+ggstyle <- function(font="Helvetica", scale=1) {
+  fs <- function(x) x*scale # Dynamic font scaling
+  ggplot2::theme(
+    plot.title = ggplot2::element_text(family=font, size=fs(26), face="bold", color="#222222"),
+    plot.subtitle = ggplot2::element_text(family=font, size=fs(18), margin=ggplot2::margin(0,0,5,0)),
+    plot.caption = ggplot2::element_blank(),
+    legend.position = "right",
+    legend.text.align = 0,
+    legend.background = ggplot2::element_blank(),
+    legend.title = ggplot2::element_blank(),
+    legend.key = ggplot2::element_blank(),
+    legend.text = ggplot2::element_text(family=font, size=fs(18), color="#222222"),
+    axis.title =  ggplot2::element_text(family=font, size=fs(18), color="#222222"),
+    axis.text = ggplot2::element_text(family=font, size=fs(18), color="#222222"),
+    axis.text.x = ggplot2::element_text(margin=ggplot2::margin(5, b=10)),
+    #axis.ticks = ggplot2::element_blank(),
+    axis.line = ggplot2::element_line(color="#222222"),
+    panel.grid.minor = ggplot2::element_blank(),
+    panel.grid.major.y = ggplot2::element_blank(),
+    panel.grid.major.x = ggplot2::element_blank(),
+    panel.background = ggplot2::element_blank(),
+    strip.background = ggplot2::element_rect(fill="white"),
+    strip.text = ggplot2::element_text(size=fs(22), hjust=0)
+  )
+}
+
+```
+
+# Load libraries and data
+```{r, include = F}
+suppressMessages(c(
+library(tidyverse),
+library(dplyr),
+library(reshape2),
+library(Seurat),
+library(Matrix),
+library(ggplot2),
+library(cowplot),
+library(knitr)
+))
+
+
+work.dir <- "/restricted/projectnb/uh2-sebas/analysis/scCentenarians/"
+```
+
+# First Level: Lymphocytes vs. Myeloid cells
+## Read in table of cell type proportions per sample (cell types vs samples)
+```{r}
+
+ct_prop <- read_csv(paste0(work.dir,"CellTypeDistribution/SuppTable.PBMC.prop.csv"))
+ct_prop
+
+```
+
+```{r, echo=F}
+require(ggforce)
+colors <- c(riso_color("midnight"),
+  riso_color("turquoise"),
+    riso_color("violet"),
+    riso_color("scarlet"),
+    riso_color("apricot"),
+    riso_color("cornflower"),
+    riso_color("burgundy"),
+    riso_color("emerald"),
+    riso_color("indigo"),
+    riso_color("brick"),
+  riso_color("pumpkin", alpha = 0.9),
+  riso_color("lagoon", alpha = 0.8),
+  riso_color("raspberry-red"),
+  riso_color("orchid"))
+
+#show_colors(colors, "Halcyon-esque")
+
+```
+
+## Plot cell type proportions for all samples grouped by age group
+```{r, fig.dim = c(30, 20)}
+ct_prop$cell.types <- factor(ct_prop$cell.types, levels=c("Lymphocyte", "Myeloid"))
+levels(ct_prop$cell.types) <- c("Lymph", "Myeloid") 
+
+ct_prop$age <- factor(ct_prop$age, levels = c("Younger Age","Middle Age","Older Age","Extreme Longevity"))
+levels(ct_prop$age) <- c("Younger","Middle","Older","EL")
+age.groups <- levels(ct_prop$age)
+
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("average proportions") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Younger") +
+  ggstyle(scale = 4) + 
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), legend.position = "top") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Middle") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  #facet_grid(~ age, scale = "free") +  
+  ggtitle("Older") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) + 
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("EL") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+
+require(patchwork)
+h1.plot.prop <- p1 + p2 + p3 + p4 + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+avg.prop.data <- bind_cols(p1$data %>% rename("Younger" = "avg.prop"), p2$data %>% rename("Middle" = "avg.prop"), p3$data %>% rename("Older" = "avg.prop"), p4$data %>% rename("EL" = "avg.prop"))
+
+#write.csv(avg.prop.data, file  = paste0(work.dir, "CellTypeDistribution/avg.prop_PBMC.csv"))
+
+# ggplot2::ggsave(
+#     filename="Figure_03_Lymphocyte.v.Myeloid.pdf",
+#     plot=h1.plot.prop,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 40,
+#     height=20,
+#     units="in",
+#     dpi=300
+# )
+
+
+```
+## Cell Type Diversity
+```{r}
+
+div.res <- read_csv(paste0(work.dir, "CellTypeDistribution/1L.Entropy.Lymph.v.Myeloid.csv"))
+
+#Box plots of cell type diversity of samples grouped by age group and colored by age group
+require(ggplot2)
+plot.ctds <- ggplot(div.res, aes(age, entropy)) + geom_boxplot(aes(fill = age)) + 
+  theme_classic(base_size = 20) + 
+  theme(axis.line=element_line()) + 
+  ylim(-1, 0) +
+  ylab("cell type diversity stastic") +
+  scale_fill_manual(values = c("blue2", "green","red", "maroon")) +
+  ggstyle() + 
+  theme(axis.title.x=element_blank(),
+        legend.position = "none") +
+  ggsignif::geom_signif(
+    y_position = c(0.0), xmin = c(0.5), xmax = c(4.5),
+    annotation = c("***"), tip_length = 0
+  )
+
+plot.ctds
+
+# ggplot2::ggsave(
+#     filename="Figure_03_Lymph.v.Myeloid.ctds.pdf",
+#     plot=plot.ctds,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 10,
+#     height=8,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
+# Second Level: NonCytotoxic vs. Cytotoxic Lymphocytes
+## Read in table of cell type proportions per sample (cell types vs samples)
+```{r}
+
+ct_prop <- read_csv(paste0(work.dir,"CellTypeDistribution/SuppTable.Lymph.csv"))
+
+```
+
+
+
+```{r, echo=F}
+require(ggforce)
+colors <- c(riso_color("midnight"),
+  riso_color("turquoise"),
+    riso_color("violet"),
+    riso_color("scarlet"),
+    riso_color("apricot"),
+    riso_color("cornflower"),
+    riso_color("burgundy"),
+    riso_color("emerald"),
+    riso_color("indigo"),
+    riso_color("brick"),
+  riso_color("pumpkin", alpha = 0.9),
+  riso_color("lagoon", alpha = 0.8),
+  riso_color("raspberry-red"),
+  riso_color("orchid"))
+
+#show_colors(colors, "Halcyon-esque")
+
+```
+
+## Plot cell type proportions for all samples grouped by age group
+```{r, fig.dim = c(30, 20)}
+ct_prop$cell.types <- factor(ct_prop$cell.types, levels=c("NonCytotoxic","Cytotoxic"))
+levels(ct_prop$cell.types) <- c("NonCyt", "Cyt") 
+
+ct_prop$age <- factor(ct_prop$age, levels = c("Younger Age","Middle Age","Older Age","Extreme Longevity"))
+levels(ct_prop$age) <- c("Younger","Middle","Older","EL")
+age.groups <- levels(ct_prop$age)
+
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("average proportions") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Younger") +
+  ggstyle(scale = 4) + 
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), legend.position = "top") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Middle") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  #facet_grid(~ age, scale = "free") +  
+  ggtitle("Older") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) + 
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("EL") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+
+require(patchwork)
+h2.plot.prop <- p1 + p2 + p3 + p4 + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+avg.prop.data <- bind_cols(p1$data %>% rename("Younger" = "avg.prop"), p2$data %>% rename("Middle" = "avg.prop"), p3$data %>% rename("Older" = "avg.prop"), p4$data %>% rename("EL" = "avg.prop"))
+
+# write.csv(avg.prop.data, file  = paste0(work.dir, "CellTypeDistribution/avg.prop_Lymph.csv"))
+# 
+# 
+# ggplot2::ggsave(
+#     filename="Figure_03_NonCyt.v.Cyt.pdf",
+#     plot=h2.plot.prop,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 40,
+#     height=20,
+#     units="in",
+#     dpi=300
+# )
+```
+
+## Cell Type Diversity
+```{r, fig.dim = c(20, 10)}
+
+div.res <- read_csv(paste0(work.dir, "CellTypeDistribution/2L.Entropy.Lymph.csv"))
+
+#Box plots of cell type diversity of samples grouped by age group and colored by age group
+require(ggplot2)
+plot.ctds <- ggplot(div.res, aes(age, entropy)) + geom_boxplot(aes(fill = age)) + 
+  theme_classic(base_size = 20) + 
+  theme(axis.line=element_line()) + 
+  ylim(-1, 0) +
+  ylab("cell type diversity stastic") +
+  scale_fill_manual(values = c("blue2", "green","red", "maroon")) +
+  ggstyle() + 
+  theme(axis.title.x=element_blank(),
+        legend.position = "none") +
+  ggsignif::geom_signif(
+    y_position = c(0.0), xmin = c(0.5), xmax = c(4.5),
+    annotation = c("NS"), tip_length = 0
+  )
+
+plot.ctds
+
+# ggplot2::ggsave(
+#     filename="Figure_03_Noncyt.v.Cyt.ctds.pdf",
+#     plot=plot.ctds,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 10,
+#     height=8,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
+# Third level
+## Myeloid Populations
+### Load in table of cell type proportions per sample (cell types vs samples)
+```{r}
+ct_prop <- read_csv(paste0(work.dir, "CellTypeDistribution/SuppTable.Myeloid.csv"))
+
+```
+
+
+
+```{r, echo=F}
+require(ggforce)
+colors <- c(riso_color("midnight"),
+  riso_color("turquoise"),
+    riso_color("violet"),
+    riso_color("scarlet"),
+    riso_color("apricot"),
+    riso_color("cornflower"),
+    riso_color("burgundy"),
+    riso_color("emerald"),
+    riso_color("indigo"),
+    riso_color("brick"),
+  riso_color("pumpkin", alpha = 0.9),
+  riso_color("lagoon", alpha = 0.8),
+  riso_color("raspberry-red"),
+  riso_color("orchid"))
+
+#show_colors(colors, "Halcyon-esque")
+
+```
+
+### Plot cell type proportions for all samples grouped by age group
+```{r, fig.dim = c(20, 30)}
+ct_prop$cell.types <- factor(ct_prop$cell.types, levels=c("Monocyte", "Dendritic"))
+levels(ct_prop$cell.types) <- c("Mono", "DC") 
+
+ct_prop$age <- factor(ct_prop$age, levels = c("Younger Age","Middle Age","Older Age","Extreme Longevity"))
+levels(ct_prop$age) <- c("Younger","Middle","Older","EL")
+age.groups <- levels(ct_prop$age)
+
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("average proportions") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Younger") +
+  ggstyle(scale = 4) + 
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), legend.position = "top") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Middle") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  #facet_grid(~ age, scale = "free") +  
+  ggtitle("Older") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) + 
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("EL") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+
+require(patchwork)
+h3.plot.prop <- p1 + p2 + p3 + p4 + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+avg.prop.data <- bind_cols(p1$data %>% rename("Younger" = "avg.prop"), p2$data %>% rename("Middle" = "avg.prop"), p3$data %>% rename("Older" = "avg.prop"), p4$data %>% rename("EL" = "avg.prop"))
+
+# write.csv(avg.prop.data, file  = paste0(work.dir, "CellTypeDistribution/avg.prop_Myeloid.csv"))
+# 
+# 
+# ggplot2::ggsave(
+#     filename="Figure_03_Myeloid.pdf",
+#     plot=h3.plot.prop,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 40,
+#     height=20,
+#     units="in",
+#     dpi=300
+# )
+```
+
+### Cell Type Diversity Statistic
+```{r}
+div.res <- read_csv(div.res, file = paste0(work.dir, "CellTypeDistribution/2L.Entropy.Myeloid.csv"))
+
+#Box plots of cell type diversity of samples grouped by age group and colored by age group
+require(ggplot2)
+plot.ctds <- ggplot(div.res, aes(age, entropy)) + geom_boxplot(aes(fill = age)) + 
+  theme_classic(base_size = 20) + 
+  theme(axis.line=element_line()) + 
+  ylim(-1, 0) +
+  ylab("cell type diversity stastic") +
+  scale_fill_manual(values = c("blue2", "green","red", "maroon")) +
+  ggstyle() + 
+  theme(axis.title.x=element_blank(),
+        legend.position = "none") +
+  ggsignif::geom_signif(
+    y_position = c(0.0), xmin = c(0.5), xmax = c(4.5),
+    annotation = c("***"), tip_length = 0
+  )
+
+plot.ctds
+
+# ggplot2::ggsave(
+#     filename="Figure_03_Myeloid.ctds.pdf",
+#     plot=plot.ctds,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 10,
+#     height=8,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
+## NonCytotoxic Populations
+### Load in table of cell type proportions per sample (cell types vs samples)
+```{r}
+
+ct_prop <- read_csv(paste0(work.dir, "CellTypeDistribution/SuppTable.NonCyt.csv"))
+
+```
+
+
+
+```{r, echo=F}
+require(ggforce)
+colors <- c(riso_color("midnight"),
+  riso_color("turquoise"),
+    riso_color("violet"),
+    riso_color("scarlet"),
+    riso_color("apricot"),
+    riso_color("cornflower"),
+    riso_color("burgundy"),
+    riso_color("emerald"),
+    riso_color("indigo"),
+    riso_color("brick"),
+  riso_color("pumpkin", alpha = 0.9),
+  riso_color("lagoon", alpha = 0.8),
+  riso_color("raspberry-red"),
+  riso_color("orchid"))
+
+#show_colors(colors, "Halcyon-esque")
+
+```
+
+### Plot cell type proportions for all samples grouped by age group
+```{r, fig.dim = c(20, 30)}
+ct_prop$cell.types <- factor(ct_prop$cell.types, levels=c("CD4 Tcell", "Bcell"))
+levels(ct_prop$cell.types) <- c("CD4TC", "BC") 
+
+ct_prop$age <- factor(ct_prop$age, levels = c("Younger Age","Middle Age","Older Age","Extreme Longevity"))
+levels(ct_prop$age) <- c("Younger","Middle","Older","EL")
+age.groups <- levels(ct_prop$age)
+
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("average proportions") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Younger") +
+  ggstyle(scale = 4) + 
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), legend.position = "top") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Middle") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  #facet_grid(~ age, scale = "free") +  
+  ggtitle("Older") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) + 
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("EL") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+
+
+require(patchwork)
+h3.plot.prop <- p1 + p2 + p3 + p4 + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+avg.prop.data <- bind_cols(p1$data %>% rename("Younger" = "avg.prop"), p2$data %>% rename("Middle" = "avg.prop"), p3$data %>% rename("Older" = "avg.prop"), p4$data %>% rename("EL" = "avg.prop"))
+
+# write.csv(avg.prop.data, file  = paste0(work.dir, "CellTypeDistribution/avg.prop_NonCyt.csv"))
+# 
+# 
+# ggplot2::ggsave(
+#     filename="Figure_03_Noncyt.pdf",
+#     plot=h3.plot.prop,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 40,
+#     height=20,
+#     units="in",
+#     dpi=300
+# )
+```
+
+### Cell Type Diversity Statistic
+```{r}
+
+div.res <- read_csv(file = paste0(work.dir, "/CellTypeDistribution/3L.Entropy.NonCyt.csv"))
+
+#Box plots of cell type diversity of samples grouped by age group and colored by age group
+require(ggplot2)
+plot.ctds <- ggplot(div.res, aes(age, entropy)) + geom_boxplot(aes(fill = age)) + 
+  theme_classic(base_size = 20) + 
+  theme(axis.line=element_line()) + 
+  ylim(-1, 0) +
+  ylab("cell type diversity stastic") +
+  scale_fill_manual(values = c("blue2", "green","red", "maroon")) +
+  ggstyle() + 
+  theme(axis.title.x=element_blank(),
+        legend.position = "none") +
+  ggsignif::geom_signif(
+    y_position = c(0.0), xmin = c(0.5), xmax = c(4.5),
+    annotation = c("**"), tip_length = 0
+  )
+
+plot.ctds
+
+# ggplot2::ggsave(
+#     filename="Figure_03_NonCyt.ctds.pdf",
+#     plot=plot.ctds,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 10,
+#     height=8,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
+## Cytotoxic Populations
+### Load in table of cell type proportions per sample (cell types vs samples)
+```{r}
+
+ct_prop <- read_csv(paste0(work.dir,"CellTypeDistribution/SuppTable.Cytotoxic.csv"))
+
+```
+
+
+
+```{r, echo=F}
+require(ggforce)
+colors <- c(riso_color("midnight"),
+  riso_color("turquoise"),
+    riso_color("violet"),
+    riso_color("scarlet"),
+    riso_color("apricot"),
+    riso_color("cornflower"),
+    riso_color("burgundy"),
+    riso_color("emerald"),
+    riso_color("indigo"),
+    riso_color("brick"),
+  riso_color("pumpkin", alpha = 0.9),
+  riso_color("lagoon", alpha = 0.8),
+  riso_color("raspberry-red"),
+  riso_color("orchid"))
+
+#show_colors(colors, "Halcyon-esque")
+
+```
+
+### Plot cell type proportions for all samples grouped by age group
+```{r, fig.dim = c(20, 30)}
+ct_prop$cell.types <- factor(ct_prop$cell.types, levels=c("Cyt2", "Cyt1"))
+levels(ct_prop$cell.types) <- c("Cyt1", "Cyt2") 
+
+ct_prop$age <- factor(ct_prop$age, levels = c("Younger Age","Middle Age","Older Age","Extreme Longevity"))
+levels(ct_prop$age) <- c("Younger","Middle","Older","EL")
+age.groups <- levels(ct_prop$age)
+
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("average proportions") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Younger") +
+  ggstyle(scale = 4) + 
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), legend.position = "top") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Middle") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  #facet_grid(~ age, scale = "free") +  
+  ggtitle("Older") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) + 
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("EL") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+
+
+require(patchwork)
+h3.plot.prop <- p1 + p2 + p3 + p4 + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+avg.prop.data <- bind_cols(p1$data %>% rename("Younger" = "avg.prop"), p2$data %>% rename("Middle" = "avg.prop"), p3$data %>% rename("Older" = "avg.prop"), p4$data %>% rename("EL" = "avg.prop"))
+
+# write.csv(avg.prop.data, file  = paste0(work.dir, "CellTypeDistribution/avg.prop_Cyt.csv"))
+# 
+# 
+# ggplot2::ggsave(
+#     filename="Figure_03_Cyt.pdf",
+#     plot=h3.plot.prop,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 40,
+#     height=20,
+#     units="in",
+#     dpi=300
+# )
+```
+
+### Cell Type Diversity Statistic
+```{r}
+
+div.res <- read_csv(div.res, file = paste0(work.dir, "CellTypeDistribution/3L.Entropy.Cyt.csv"))
+
+#Box plots of cell type diversity of samples grouped by age group and colored by age group
+require(ggplot2)
+plot.ctds <- ggplot(div.res, aes(age, entropy)) + geom_boxplot(aes(fill = age)) + 
+  theme_classic(base_size = 20) + 
+  theme(axis.line=element_line()) + 
+  ylim(-1, 0) +
+  ylab("cell type diversity stastic") +
+  scale_fill_manual(values = c("blue2", "green","red", "maroon")) +
+  ggstyle() + 
+  theme(axis.title.x=element_blank(),
+        legend.position = "none") +
+  ggsignif::geom_signif(
+    y_position = c(0.0), xmin = c(0.5), xmax = c(4.5),
+    annotation = c("NS"), tip_length = 0
+  )
+
+plot.ctds
+
+# ggplot2::ggsave(
+#     filename="Figure_03_Cyt.ctds.pdf",
+#     plot=plot.ctds,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 10,
+#     height=8,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
+# Fourth Level: Subtypes
+
+## NonCytotoxic CD4 T cells
+### Load in table of cell type proportions per sample (cell types vs samples)
+
+```{r}
+
+ct_prop <- read_csv(paste0(work.dir, "CellTypeDistribution/SuppTable.CD4TCell.csv"))
+
+```
+
+```{r, echo=F}
+require(ggforce)
+colors <- c(riso_color("midnight"),
+  riso_color("turquoise"),
+    riso_color("violet"),
+    riso_color("scarlet"),
+    riso_color("apricot"),
+    riso_color("cornflower"),
+    riso_color("burgundy"),
+    riso_color("emerald"),
+    riso_color("indigo"),
+    riso_color("brick"),
+  riso_color("pumpkin", alpha = 0.9),
+  riso_color("lagoon", alpha = 0.8),
+  riso_color("raspberry-red"),
+  riso_color("orchid"),
+  riso_color("grape"))
+
+show_colors(colors, "Halcyon-esque")
+
+```
+
+### Plot cell type proportions for all samples grouped by age group
+```{r, fig.dim = c(30, 20)}
+ct_prop$cell.types <- factor(ct_prop$cell.types, levels=c("CD4 T Naive","CD4 T Memory"))
+levels(ct_prop$cell.types) <- c("nCD4TC", "mCD4TC") 
+
+ct_prop$age <- factor(ct_prop$age, levels = c("Younger Age","Middle Age","Older Age","Extreme Longevity"))
+levels(ct_prop$age) <- c("Younger","Middle","Older","EL")
+age.groups <- levels(ct_prop$age)
+
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("average proportions") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Younger") +
+  ggstyle(scale = 4) + 
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), legend.position = "top") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Middle") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  #facet_grid(~ age, scale = "free") +  
+  ggtitle("Older") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) + 
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("EL") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+
+
+require(patchwork)
+h4.plot.prop <- p1 + p2 + p3 + p4 + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+avg.prop.data <- bind_cols(p1$data %>% rename("Younger" = "avg.prop"), p2$data %>% rename("Middle" = "avg.prop"), p3$data %>% rename("Older" = "avg.prop"), p4$data %>% rename("EL" = "avg.prop"))
+
+# write.csv(avg.prop.data, file  = paste0(work.dir, "CellTypeDistribution/avg.prop_CD4TCell.csv"))
+# 
+# 
+# ggplot2::ggsave(
+#     filename="Figure_03_Noncyt.CD4.pdf",
+#     plot=h4.plot.prop,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 40,
+#     height=20,
+#     units="in",
+#     dpi=300
+# )
+```
+
+### Cell Type Diversity Statistic
+```{r}
+
+div.res <- read_csv(file = paste0(work.dir, "CellTypeDistribution/4L.Entropy.CD4.csv"))
+
+#Box plots of cell type diversity of samples grouped by age group and colored by age group
+require(ggplot2)
+plot.ctds <- ggplot(div.res, aes(age, entropy)) + geom_boxplot(aes(fill = age)) + 
+  theme_classic(base_size = 20) + 
+  theme(axis.line=element_line()) + 
+  ylim(-1, 0) +
+  ylab("cell type diversity stastic") +
+  scale_fill_manual(values = c("blue2", "green","red", "maroon")) +
+  ggstyle() + 
+  theme(axis.title.x=element_blank(),
+        legend.position = "none") +
+  ggsignif::geom_signif(
+    y_position = c(0.0), xmin = c(0.5), xmax = c(4.5),
+    annotation = c("*"), tip_length = 0
+  )
+
+plot.ctds
+
+# ggplot2::ggsave(
+#     filename="Figure_03_NonCyt.CD4.ctds.pdf",
+#     plot=plot.ctds,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 10,
+#     height=8,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
+
+## B cells
+### Load in table of cell type proportions per sample (cell types vs samples)
+```{r}
+
+ct_prop <- read_csv(paste0(work.dir, "CellTypeDistribution/SuppTable.BCell.csv"))
+
+```
+
+```{r, echo=F}
+require(ggforce)
+colors <- c(riso_color("midnight"),
+  riso_color("turquoise"),
+    riso_color("violet"),
+    riso_color("scarlet"),
+    riso_color("apricot"),
+    riso_color("cornflower"),
+    riso_color("burgundy"),
+    riso_color("emerald"),
+    riso_color("indigo"),
+    riso_color("brick"),
+  riso_color("pumpkin", alpha = 0.9),
+  riso_color("lagoon", alpha = 0.8),
+  riso_color("raspberry-red"),
+  riso_color("orchid"),
+  riso_color("grape"))
+
+#show_colors(colors, "Halcyon-esque")
+
+```
+
+### Plot cell type proportions for all samples grouped by age group
+```{r, fig.dim = c(30, 20)}
+ct_prop$cell.types <- factor(ct_prop$cell.types, levels=c("BC Naive","BC Memory"))
+levels(ct_prop$cell.types) <- c("nBC", "mBC") 
+
+ct_prop$age <- factor(ct_prop$age, levels = c("Younger Age","Middle Age","Older Age","Extreme Longevity"))
+levels(ct_prop$age) <- c("Younger","Middle","Older","EL")
+age.groups <- levels(ct_prop$age)
+
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("average proportions") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Younger") +
+  ggstyle(scale = 4) + 
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), legend.position = "top") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Middle") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  #facet_grid(~ age, scale = "free") +  
+  ggtitle("Older") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) + 
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("EL") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+
+
+require(patchwork)
+h5.plot.prop <- p1 + p2 + p3 + p4 + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+avg.prop.data <- bind_cols(p1$data %>% rename("Younger" = "avg.prop"), p2$data %>% rename("Middle" = "avg.prop"), p3$data %>% rename("Older" = "avg.prop"), p4$data %>% rename("EL" = "avg.prop"))
+
+# write.csv(avg.prop.data, file  = paste0(work.dir, "CellTypeDistribution/avg.prop_BCell.csv"))
+# 
+# 
+# ggplot2::ggsave(
+#     filename="Figure_03_Bcell.pdf",
+#     plot=h5.plot.prop,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 40,
+#     height=20,
+#     units="in",
+#     dpi=300
+# )
+```
+
+### Cell Type Diversity Statistic
+```{r}
+
+div.res <- read_csv(file = paste0(work.dir, "CellTypeDistribution/4L.Entropy.Bcell.csv"))
+
+#Box plots of cell type diversity of samples grouped by age group and colored by age group
+require(ggplot2)
+plot.ctds <- ggplot(div.res, aes(age, entropy)) + geom_boxplot(aes(fill = age)) + 
+  theme_classic(base_size = 20) + 
+  theme(axis.line=element_line()) + 
+  ylim(-1, 0) +
+  ylab("cell type diversity stastic") +
+  scale_fill_manual(values = c("blue2", "green","red", "maroon")) +
+  ggstyle() + 
+  theme(axis.title.x=element_blank(),
+        legend.position = "none") +
+  ggsignif::geom_signif(
+    y_position = c(0.0), xmin = c(0.5), xmax = c(4.5),
+    annotation = c("NS"), tip_length = 0
+  )
+
+plot.ctds
+
+# ggplot2::ggsave(
+#     filename="Figure_03_Bcell.ctds.pdf",
+#     plot=plot.ctds,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 10,
+#     height=8,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
+## Cytotoxic Adpative
+### Load in table of cell type proportions per sample (cell types vs samples)
+```{r}
+
+ct_prop <- read_csv(paste0(work.dir, "CellTypeDistribution/SuppTable.Cyt2.csv"))
+
+```
+
+```{r, echo=F}
+require(ggforce)
+colors <- c(riso_color("midnight"),
+  riso_color("turquoise"),
+    riso_color("violet"),
+    riso_color("scarlet"),
+    riso_color("apricot"),
+    riso_color("cornflower"),
+    riso_color("burgundy"),
+    riso_color("emerald"),
+    riso_color("indigo"),
+    riso_color("brick"),
+  riso_color("pumpkin", alpha = 0.9),
+  riso_color("lagoon", alpha = 0.8),
+  riso_color("raspberry-red"),
+  riso_color("orchid"),
+  riso_color("grape"),
+  riso_color("hunter-green"),
+  riso_color("marine-red"))
+
+#show_colors(colors, "Halcyon-esque")
+
+```
+
+### Plot cell type proportions for all samples grouped by age group
+```{r, fig.dim = c(30, 20)}
+ct_prop$cell.types <- factor(ct_prop$cell.types, levels=c("CD4 T Cytotoxic","CD8 T"))
+levels(ct_prop$cell.types) <- c("cCD4TC", "cCD8TC") 
+
+ct_prop$age <- factor(ct_prop$age, levels = c("Younger Age","Middle Age","Older Age","Extreme Longevity"))
+levels(ct_prop$age) <- c("Younger","Middle","Older","EL")
+age.groups <- levels(ct_prop$age)
+
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("average proportions") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Younger") +
+  ggstyle(scale = 4) + 
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), legend.position = "top") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Middle") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  #facet_grid(~ age, scale = "free") +  
+  ggtitle("Older") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) + 
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("EL") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+
+
+require(patchwork)
+h5.plot.prop <- p1 + p2 + p3 + p4 + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+avg.prop.data <- bind_cols(p1$data %>% rename("Younger" = "avg.prop"), p2$data %>% rename("Middle" = "avg.prop"), p3$data %>% rename("Older" = "avg.prop"), p4$data %>% rename("EL" = "avg.prop"))
+
+# write.csv(avg.prop.data, file  = paste0(work.dir, "CellTypeDistribution/avg.prop_Cyt2.csv"))
+# 
+# 
+# ggplot2::ggsave(
+#     filename="Figure_03_Cyt.Adapt.pdf",
+#     plot=h5.plot.prop,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 40,
+#     height=20,
+#     units="in",
+#     dpi=300
+# )
+```
+
+### Cell Type Diversity Statistic
+```{r}
+
+div.res <- read_csv(file = paste0(work.dir, "CellTypeDistribution/4L.Entropy.Cyt2.csv"))
+
+#Box plots of cell type diversity of samples grouped by age group and colored by age group
+require(ggplot2)
+plot.ctds <- ggplot(div.res, aes(age, entropy)) + geom_boxplot(aes(fill = age)) + 
+  theme_classic(base_size = 20) + 
+  theme(axis.line=element_line()) + 
+  ylim(-1, 0) +
+  ylab("cell type diversity stastic") +
+  scale_fill_manual(values = c("blue2", "green","red", "maroon")) +
+  ggstyle() + 
+  theme(axis.title.x=element_blank(),
+        legend.position = "none") +
+  ggsignif::geom_signif(
+    y_position = c(0.0), xmin = c(0.5), xmax = c(4.5),
+    annotation = c("***"), tip_length = 0
+  )
+
+plot.ctds
+
+# ggplot2::ggsave(
+#     filename="Figure_03_Cyt2.ctds.pdf",
+#     plot=plot.ctds,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 10,
+#     height=8,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
+## Cytotoxic Innate
+### Load in table of cell type proportions per sample (cell types vs samples)
+```{r}
+
+ct_prop <- read_csv(paste0(work.dir, "CellTypeDistribution/SuppTable.Cyt1.csv"))
+
+```
+
+```{r, echo=F}
+require(ggforce)
+colors <- c(riso_color("midnight"),
+  riso_color("turquoise"),
+    riso_color("violet"),
+    riso_color("scarlet"),
+    riso_color("apricot"),
+    riso_color("cornflower"),
+    riso_color("burgundy"),
+    riso_color("emerald"),
+    riso_color("indigo"),
+    riso_color("brick"),
+  riso_color("pumpkin", alpha = 0.9),
+  riso_color("lagoon", alpha = 0.8),
+  riso_color("raspberry-red"),
+  riso_color("orchid"),
+  riso_color("grape"),
+  riso_color("hunter-green"),
+  riso_color("marine-red"),
+  riso_color("teal"),
+  riso_color("cranberry"))
+
+show_colors(colors, "Halcyon-esque")
+
+```
+
+### Plot cell type proportions for all samples grouped by age group
+```{r, fig.dim = c(30, 20)}
+ct_prop$cell.types <- factor(ct_prop$cell.types, levels=c("T gamma delta","NK"))
+levels(ct_prop$cell.types) <- c("gdTC", "NK") 
+
+ct_prop$age <- factor(ct_prop$age, levels = c("Younger Age","Middle Age","Older Age","Extreme Longevity"))
+levels(ct_prop$age) <- c("Younger","Middle","Older","EL")
+age.groups <- levels(ct_prop$age)
+
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("average proportions") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Younger") +
+  ggstyle(scale = 4) + 
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), legend.position = "top") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Middle") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  #facet_grid(~ age, scale = "free") +  
+  ggtitle("Older") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) + 
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("EL") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+
+
+require(patchwork)
+h5.plot.prop <- p1 + p2 + p3 + p4 + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+avg.prop.data <- bind_cols(p1$data %>% rename("Younger" = "avg.prop"), p2$data %>% rename("Middle" = "avg.prop"), p3$data %>% rename("Older" = "avg.prop"), p4$data %>% rename("EL" = "avg.prop"))
+
+# write.csv(avg.prop.data, file  = paste0(work.dir, "CellTypeDistribution/avg.prop_Cyt1.csv"))
+# 
+# 
+# ggplot2::ggsave(
+#     filename="Figure_03_Cyt.Innate.pdf",
+#     plot=h5.plot.prop,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 40,
+#     height=20,
+#     units="in",
+#     dpi=300
+# )
+```
+
+### Cell Type Diversity Statistic
+```{r}
+
+div.res <- read_csv(file = paste0(work.dir, "CellTypeDistribution/4L.Entropy.Cyt1.csv"))
+
+#Box plots of cell type diversity of samples grouped by age group and colored by age group
+require(ggplot2)
+plot.ctds <- ggplot(div.res, aes(age, entropy)) + geom_boxplot(aes(fill = age)) + 
+  theme_classic(base_size = 20) + 
+  theme(axis.line=element_line()) + 
+  ylim(-1, 0) +
+  ylab("cell type diversity stastic") +
+  scale_fill_manual(values = c("blue2", "green","red", "maroon")) +
+  ggstyle() + 
+  theme(axis.title.x=element_blank(),
+        legend.position = "none") +
+  ggsignif::geom_signif(
+    y_position = c(0.0), xmin = c(0.5), xmax = c(4.5),
+    annotation = c("**"), tip_length = 0
+  )
+
+plot.ctds
+
+# ggplot2::ggsave(
+#     filename="Figure_03_Cyt1.ctds.pdf",
+#     plot=plot.ctds,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 10,
+#     height=8,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
+
+## Monocytes
+### Load in table of cell type proportions per sample (cell types vs samples)
+```{r}
+
+ct_prop <- read_csv(paste0(work.dir, "CellTypeDistribution/SuppTable.Mono.csv"))
+
+```
+
+```{r, echo=F}
+require(ggforce)
+colors <- c(riso_color("midnight"),
+  riso_color("turquoise"),
+    riso_color("violet"),
+    riso_color("scarlet"),
+    riso_color("apricot"),
+    riso_color("cornflower"),
+    riso_color("burgundy"),
+    riso_color("emerald"),
+    riso_color("indigo"),
+    riso_color("brick"),
+  riso_color("pumpkin", alpha = 0.9),
+  riso_color("lagoon", alpha = 0.8),
+  riso_color("raspberry-red"),
+  riso_color("orchid"),
+  riso_color("grape"),
+  riso_color("hunter-green"),
+  riso_color("marine-red"))
+
+show_colors(colors, "Halcyon-esque")
+
+```
+
+### Plot cell type proportions for all samples grouped by age group
+```{r, fig.dim = c(30, 20)}
+ct_prop$cell.types <- factor(ct_prop$cell.types, levels=c("M14","M16"))
+levels(ct_prop$cell.types) <- c("M14", "M16") 
+
+ct_prop$age <- factor(ct_prop$age, levels = c("Younger Age","Middle Age","Older Age","Extreme Longevity"))
+levels(ct_prop$age) <- c("Younger","Middle","Older","EL")
+age.groups <- levels(ct_prop$age)
+
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("average proportions") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Younger") +
+  ggstyle(scale = 4) + 
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), legend.position = "top") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Middle") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  #facet_grid(~ age, scale = "free") +  
+  ggtitle("Older") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) + 
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("EL") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+ 
+
+require(patchwork)
+h6.plot.prop <- p1 + p2 + p3 + p4 + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+avg.prop.data <- bind_cols(p1$data %>% rename("Younger" = "avg.prop"), p2$data %>% rename("Middle" = "avg.prop"), p3$data %>% rename("Older" = "avg.prop"), p4$data %>% rename("EL" = "avg.prop"))
+
+# write.csv(avg.prop.data, file  = paste0(work.dir, "CellTypeDistribution/avg.prop_Monocyte.csv"))
+# 
+# 
+# ggplot2::ggsave(
+#     filename="Figure_03_Mono.pdf",
+#     plot=h6.plot.prop,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 40,
+#     height=20,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
+### Cell type Diversity Statistic
+```{r}
+
+div.res <- read_csv(paste0(work.dir, "CellTypeDistribution/4L.Entropy.Mono.csv"))
+
+#Box plots of cell type diversity of samples grouped by age group and colored by age group
+require(ggplot2)
+plot.ctds <- ggplot(div.res, aes(age, entropy)) + geom_boxplot(aes(fill = age)) + 
+  theme_classic(base_size = 20) + 
+  theme(axis.line=element_line()) + 
+  ylim(-1, 0) +
+  ylab("cell type diversity stastic") +
+  scale_fill_manual(values = c("blue2", "green","red", "maroon")) +
+  ggstyle() + 
+  theme(axis.title.x=element_blank(),
+        legend.position = "none") +
+  ggsignif::geom_signif(
+    y_position = c(0.0), xmin = c(0.5), xmax = c(4.5),
+    annotation = c("NS"), tip_length = 0
+  )
+
+plot.ctds
+
+# ggplot2::ggsave(
+#     filename="Figure_03_Mono.ctds.pdf",
+#     plot=plot.ctds,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 10,
+#     height=8,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
+
+
+
+## Dendritic cells
+### Load in table of cell type proportions per sample (cell types vs samples)
+```{r}
+
+ct_prop <- read_csv(paste0(work.dir, "CellTypeDistribution/SuppTable.DC.csv"))
+
+```
+
+```{r, echo=F}
+require(ggforce)
+colors <- c(riso_color("midnight"),
+  riso_color("turquoise"),
+    riso_color("violet"),
+    riso_color("scarlet"),
+    riso_color("apricot"),
+    riso_color("cornflower"),
+    riso_color("burgundy"),
+    riso_color("emerald"),
+    riso_color("indigo"),
+    riso_color("brick"),
+  riso_color("pumpkin", alpha = 0.9),
+  riso_color("lagoon", alpha = 0.8),
+  riso_color("raspberry-red"),
+  riso_color("orchid"),
+  riso_color("grape"),
+  riso_color("hunter-green"),
+  riso_color("marine-red"),
+  riso_color("copper"),
+  riso_color("moss"))
+
+show_colors(colors, "Halcyon-esque")
+
+```
+
+### Plot cell type proportions for all samples grouped by age group
+```{r, fig.dim = c(30, 20)}
+ct_prop$cell.types <- factor(ct_prop$cell.types, levels=c("mDC","pDC"))
+levels(ct_prop$cell.types) <- c("mDC", "pDC") 
+
+ct_prop$age <- factor(ct_prop$age, levels = c("Younger Age","Middle Age","Older Age","Extreme Longevity"))
+levels(ct_prop$age) <- c("Younger","Middle","Older","EL")
+age.groups <- levels(ct_prop$age)
+
+
+p1 <- ggplot(ct_prop %>% filter(age == age.groups[1]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  ylab("average proportions") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Younger") +
+  ggstyle(scale = 4) + 
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), legend.position = "top") 
+p2 <- ggplot(ct_prop %>% filter(age == age.groups[2]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("Middle") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p3 <- ggplot(ct_prop %>% filter(age == age.groups[3]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_size = 60) + 
+  xlab("sample") +
+  theme(axis.line=element_line()) + 
+  #facet_grid(~ age, scale = "free") +  
+  ggtitle("Older") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+p4 <- ggplot(ct_prop %>% filter(age == age.groups[4]) %>% group_by(cell.types) %>% dplyr::summarize(avg.prop = mean(proportion, na.rm=TRUE)), aes(x = '', y = avg.prop)) +
+  geom_bar(aes(group = cell.types, fill = cell.types ), stat="identity", position = "stack") +
+  scale_fill_manual(values = colors) + 
+  theme_classic(base_size = 60) + 
+  theme(axis.line=element_line()) + 
+  xlab("sample") +
+  #facet_grid(~ age, scale = "free") + 
+  ggtitle("EL") +
+  ggstyle(scale = 4) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "top") 
+
+
+require(patchwork)
+h7.plot.prop <- p1 + p2 + p3 + p4 + patchwork::plot_layout(nrow = 1, byrow = FALSE)
+
+avg.prop.data <- bind_cols(p1$data %>% rename("Younger" = "avg.prop"), p2$data %>% rename("Middle" = "avg.prop"), p3$data %>% rename("Older" = "avg.prop"), p4$data %>% rename("EL" = "avg.prop"))
+
+# write.csv(avg.prop.data, file  = paste0(work.dir, "CellTypeDistribution/avg.prop_DC.csv"))
+# 
+# 
+# ggplot2::ggsave(
+#     filename="Figure_03_DC.pdf",
+#     plot=h7.plot.prop,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 40,
+#     height=20,
+#     units="in",
+#     dpi=300
+# )
+```
+
+### Cell Type Diversity Statistic
+
+```{r}
+
+div.res <- read_csv(paste0(work.dir, "CellTypeDistribution/4L.Entropy.DC.csv"))
+
+#Box plots of cell type diversity of samples grouped by age group and colored by age group
+require(ggplot2)
+plot.ctds <- ggplot(div.res, aes(age, entropy)) + geom_boxplot(aes(fill = age)) + 
+  theme_classic(base_size = 20) + 
+  theme(axis.line=element_line()) + 
+  ylim(-1, 0) +
+  ylab("cell type diversity stastic") +
+  scale_fill_manual(values = c("blue2", "green","red", "maroon")) +
+  ggstyle() + 
+  theme(axis.title.x=element_blank(),
+        legend.position = "none") +
+  ggsignif::geom_signif(
+    y_position = c(0.0), xmin = c(0.5), xmax = c(4.5),
+    annotation = c("NS"), tip_length = 0
+  )
+
+plot.ctds
+
+# ggplot2::ggsave(
+#     filename="Figure_03_DC.ctds.pdf",
+#     plot=plot.ctds,
+#     path=paste0(work.dir,"/Figures"),
+#     scale=1,
+#     width = 10,
+#     height=8,
+#     units="in",
+#     dpi=300
+# )
+
+```
+
